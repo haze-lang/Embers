@@ -1,0 +1,48 @@
+name:                Embers
+version:             0.1.0.0
+github:              "syp-lang/Embers"
+license:             GPL-3.0-or-later
+author:              "Syed Moiz Ur Rehman"
+maintainer:          "syedmoizurrehman@hotmail.com"
+copyright:           "2019 Syed Moiz Ur Rehman"
+
+extra-source-files:
+- README.md
+- ChangeLog.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/syp-lang/Embers#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+
+library:
+  source-dirs: src
+
+executables:
+  Embers:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - Embers
+
+tests:
+  Embers-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - Embers
