@@ -28,67 +28,46 @@ data Newline = Linebreak deriving Show
 
 data Whitespace = Space | Newline deriving Show
 
-data Iden = Func String | Type String | String deriving Show
-
 data Token = TYPE | RECORD | IF | THEN | ELSE | SWITCH      -- Keywords
-            | EQUALS | COLON | ARROW | LPAREN | RPAREN | LBRACE | RBRACE
-            | DARROW
-            | BSLASH
+            | EQUALS | COLON | ARROW | LPAREN | RPAREN | LBRACE | RBRACE | DARROW | BSLASH | CROSS | UNIT | TERMINATOR   -- Symbols
             | FUNCTION String | TYPENAME String | IDENTIFIER String -- Identifiers
-            | CROSS
-            | UNIT
-            | NUMBER Int                                -- NUMBER
-            | STRING String                             -- String
-            | WHITESPACE Whitespace                     -- WHITESPACE
-            | TERMINATOR (Maybe Newline)
+            | NUMBER Int | STRING String                -- Literals
+            | WHITESPACE Whitespace                     -- Space/Newline
             | COMMENT deriving Show
 
 -- |Scans the given string and returns list of tokens.
 scan :: String -> [Token]
-scan xs = case parse scanHigh xs of
-    Just ((t, w), []) -> t : [w]
-    Just ((t, w), rest) -> t : w : scan rest
-    Nothing -> case parse scanLow xs of
-        Just ((t, w), []) -> t : [w]
-        Just ((t, w), rest) -> t : w : scan rest
+scan xs = case parse wspace xs of
+    Just (_, r) -> scanUtil r
+    Nothing -> scanUtil xs
+            
+scanUtil :: String -> [Token]
+scanUtil xs = case parse symbolsLiterals xs of
+    Just (t, []) -> [t]
+    Just (t, rest) -> t : scan rest
+    
+    Nothing -> case parse ident xs of
+        Just (ident, []) -> case parse keywords xs of
+                        Just (keyword, []) -> [keyword]
+                        _ -> [ident]
+        Just (ident, rest) -> case parse keywords xs of
+                        Just (keyword, []) -> [keyword]
+                        Just (keyword, rest2) -> if rest == rest2 then keyword : scan rest2 else ident : scan rest
+                        Nothing -> ident : scan rest
         Nothing -> [] -- Error
-
--- scanSymbols :: Parser (Token, Token)
--- scanSymbols = do
-
-scanHigh :: Parser (Token, Token)
-scanHigh = do
-            x <- high
-            _ <- some whitespace
-            return (x, WHITESPACE Space)
-            -- <|> do
-                -- y <- high
-                -- return [y]
-
-scanLow :: Parser (Token, Token)
-scanLow = do
-            x <- low
-            _ <- some whitespace
-            return (x, WHITESPACE Space)
-            -- <|> do
-                -- y <- low
-                -- return [y]
 
 wspace :: Parser Token
 wspace = do
     some whitespace
     return (WHITESPACE Space)
 
-each :: Parser Token
-each = high <|> low
+symbolsLiterals = symbols <|> literals
 
-high = symbols <|> keywords
-
-low = ident <|> number <|> string <|> terminator <|> whitespace
+literals = numberLit <|> stringLit
 
 keywords = _type <|> record <|> _if <|> _then <|> _else <|> switch
 
-symbols =  bslash <|> cross <|> unit <|> equals <|> colon <|> arrow <|> darrow <|> lparen <|> rparen <|> lbrace <|> rbrace
+symbols =  terminator <|> bslash <|> cross <|> unit <|> darrow <|> equals <|> colon <|> arrow <|> lparen <|> rparen <|> lbrace <|> rbrace
 
 tokenString :: Token -> String
 tokenString t = case t of
@@ -100,8 +79,7 @@ tokenString t = case t of
     WHITESPACE w -> case w of
                     Space -> " "
                     Newline -> "\r\n"
-    TERMINATOR Nothing -> "Terminator"
-    TERMINATOR (Just _) -> "\r\n"
+    TERMINATOR -> "Terminator"
     x -> show x
 
 tryChar :: Char -> Parser Char
@@ -158,8 +136,8 @@ alpha = sat Data.Char.isAlpha
 digit :: Parser Char
 digit = sat Data.Char.isDigit
 
-number :: Parser Token
-number = do
+numberLit :: Parser Token
+numberLit = do
         _ <- tryChar '-'
         x <- some digit
         return (NUMBER (-(read x)))
@@ -168,8 +146,8 @@ number = do
             x <- some digit
             return (NUMBER (read x))
 
-string :: Parser Token
-string = do
+stringLit :: Parser Token
+stringLit = do
         _ <- tryChar '"'
         x <- many alphanum
         _ <- tryChar '"'
@@ -178,21 +156,41 @@ string = do
 terminator :: Parser Token
 terminator = do
             _ <- tryChar ';'
-            return (TERMINATOR Nothing)
-            <|> newline
+            return TERMINATOR
 
 whitespace :: Parser Token
 whitespace = do
             _ <- tryChar ' '
             return (WHITESPACE Space)
-            -- <|> newline
+            <|> newline
 
 newline :: Parser Token
 newline = do
         _ <- tryChar '\r'
         _ <- tryChar '\n'
-        return (TERMINATOR (Just Linebreak))
+        return (WHITESPACE Newline)
         <|> do
             _ <- tryChar '\r' <|> tryChar '\n'
-            return (TERMINATOR (Just Linebreak))
+            return (WHITESPACE Newline)
 
+instance Eq Token where
+    (==) TYPE TYPE = True
+    (==) RECORD RECORD = True
+    (==) IF IF = True
+    (==) THEN THEN = True
+    (==) ELSE ELSE = True
+    (==) SWITCH SWITCH = True
+    (==) CROSS CROSS = True
+    (==) UNIT UNIT = True
+    (==) EQUALS EQUALS = True
+    (==) COLON COLON = True
+    (==) ARROW ARROW = True
+    (==) DARROW DARROW = True
+    (==) BSLASH BSLASH = True
+    (==) LPAREN LPAREN = True
+    (==) RPAREN RPAREN = True
+    (==) LBRACE LBRACE = True
+    (==) RBRACE RBRACE = True
+    (==) (WHITESPACE Space) (WHITESPACE Space) = True
+    (==) (WHITESPACE Newline) (WHITESPACE Newline) = True
+    (==) _ _ = False
