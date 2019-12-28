@@ -23,7 +23,23 @@ where
 import Control.Applicative
 import Data.Char
 
-newtype Parser a = P (String -> Maybe (a, String))
+type Column = Int
+type Line = Int
+type Filename = String
+
+data Metadata = MData Column Line Filename deriving Show
+instance Eq Metadata where
+    (==) (MData c l f) (MData c2 l2 f2) = c == c2 && l == l2 && f == f2
+
+incCol (MData c l f) = MData (c + 1) l f
+incLine (MData c l f) = MData 0 (l + 1) f
+
+data Source = S String Metadata deriving Show
+
+instance Eq Source where
+    (==) (S x m1) (S y m2) = x == y && m1 == m2
+
+newtype Parser a = P (Source -> Maybe (a, Source))
 
 instance Functor Parser where
     -- fmap :: (a -> b) -> Parser a -> Parser b
@@ -34,7 +50,7 @@ instance Functor Parser where
 
 instance Applicative Parser where
     -- pure :: a -> Parser a
-    pure v = P (\inp -> Just (v, inp))
+    pure v = P (\(S inp m) -> Just (v, S inp m))
     -- <*> :: Parser (a -> b) -> Parser a -> Parser b
     pg <*> px = P (\inp -> case parse pg inp of
                     Nothing -> Nothing
@@ -58,14 +74,21 @@ instance Alternative Parser where
                 )
 
 -- Extract the parser from P and apply it to inp
-parse :: Parser a -> String -> Maybe (a, String)
-parse (P p) inp = p inp
+parse :: Parser a -> Source -> Maybe (a, Source)
+parse (P p) src = p src
 
 -- Return first value
 item :: Parser Char
 item = P (\inp -> case inp of
-            [] -> Nothing
-            x:xs -> Just (x, xs))
+            (S [] m) -> Nothing
+            -- (S (x:xs) m) -> Just (x, S xs (incCol m))
+            (S (x:xs) m) -> case x of
+                '\r' -> case xs of
+                    ('\n':bs) -> Just (x, S bs (incLine m))
+                    _ -> Just (x, S xs (incLine m))
+                '\n' -> Just (x, S xs (incLine m))
+                _ -> Just (x, S xs (incCol m))
+        )
 
 sat :: (Char -> Bool) -> Parser Char
 sat p = do

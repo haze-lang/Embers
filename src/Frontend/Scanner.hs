@@ -33,28 +33,39 @@ data Token = TYPE | RECORD | IF | THEN | ELSE | SWITCH      -- Keywords
             | FUNCTION String | TYPENAME String | IDENTIFIER String -- Identifiers
             | NUMBER Int | STRING String                -- Literals
             | WHITESPACE Whitespace                     -- Space/Newline
-            | COMMENT deriving Show
+            | COMMENT
+            | Invalid Metadata deriving Show
 
 -- |Scans the given string and returns list of tokens.
 scan :: String -> [Token]
-scan xs = case parse wspace xs of
-    Just (_, r) -> scanUtil r
-    Nothing -> scanUtil xs
-            
-scanUtil :: String -> [Token]
+scan src = scanInit $ S src (MData 0 0 "")
+
+scanInit :: Source -> [Token]
+scanInit src = case src of 
+    (S [] _) -> []
+    _ -> case parse wspace src of
+        Just (_, r) -> scanUtil r
+        Nothing -> scanUtil src
+
+scanUtil :: Source -> [Token]
 scanUtil xs = case parse symbolsLiterals xs of
-    Just (t, []) -> [t]
-    Just (t, rest) -> t : scan rest
-    
+    Just (t, (S [] _)) -> [t]
+    Just (t, rest) -> t : scanInit rest
+
     Nothing -> case parse ident xs of
-        Just (ident, []) -> case parse keywords xs of
-                        Just (keyword, []) -> [keyword]
+        Just (ident, (S [] _)) -> case parse keywords xs of
+                        Just (keyword, (S [] _)) -> [keyword]
                         _ -> [ident]
         Just (ident, rest) -> case parse keywords xs of
-                        Just (keyword, []) -> [keyword]
-                        Just (keyword, rest2) -> if rest == rest2 then keyword : scan rest2 else ident : scan rest
-                        Nothing -> ident : scan rest
-        Nothing -> [] -- Error
+                        Just (keyword, (S [] _)) -> [keyword]
+                        Just (keyword, rest2) -> if rest == rest2 then keyword : scanInit rest2 else ident : scanInit rest
+                        Nothing -> ident : scanInit rest
+        Nothing -> Invalid (MData 0 0 "") : scanInit (drop1 1 xs) -- Error
+
+drop1 :: Int -> Source -> Source
+drop1 n src = case src of
+    S (x:xs) m -> S (drop n (x:xs)) (incCol m)
+    S [] m -> S [] m
 
 wspace :: Parser Token
 wspace = do
@@ -165,11 +176,20 @@ whitespace = do
             <|> newline
 
 newline :: Parser Token
+-- newline = P (\inp -> case inp of
+--     (S [] m) -> Nothing
+--     (S (x:xs) m) -> case x of
+--         '\r' -> case xs of
+--             ('\n':bs) -> Just (WHITESPACE Newline, S bs (incLine m))
+--             _ -> Just (WHITESPACE Newline, S xs (incLine m))
+--         '\n' -> Just (WHITESPACE Newline, S xs (incLine m))
+--         _ -> Nothing
+--         )
 newline = do
-        _ <- tryChar '\r'
-        _ <- tryChar '\n'
-        return (WHITESPACE Newline)
-        <|> do
+        -- _ <- tryChar '\r'
+        -- _ <- tryChar '\n'
+        -- return (WHITESPACE Newline)
+        -- <|> do
             _ <- tryChar '\r' <|> tryChar '\n'
             return (WHITESPACE Newline)
 

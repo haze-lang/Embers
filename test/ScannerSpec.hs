@@ -9,31 +9,33 @@ testPass inp label f g = it ("scans " ++ label ++ " " ++ inp) $ f inp `shouldBe`
 
 testFail inp label f = it ("doesn't scan " ++ label ++ " " ++ inp) $ f inp `shouldBe` ""
 
-parseSymbol inp = case parse symbols inp of
-  Just (t, []) -> t
+strSrc xs = S xs (MData 0 0 "")
+
+parseSymbol inp = case parse symbols (strSrc inp) of
+  Just (t, (S [] _)) -> t
   _ -> error "Unexpected scanner output."
 
-parseIdent inp = case parse ident inp of
-    Just (t, []) -> case t of
+parseIdent inp = case parse ident (strSrc inp) of
+    Just (t, (S [] _)) -> case t of
         IDENTIFIER name -> name
         _ -> error "Unexpected scanner output"
     
     Nothing -> ""
         
-parseNumLiteral inp = case parse numberLit inp of
-    Just (NUMBER lit, []) -> lit
+parseNumLiteral inp = case parse numberLit (strSrc inp) of
+    Just (NUMBER lit, (S [] _)) -> lit
     _ -> error "Unexpected scanner output"
 
-parseStrLiteral inp = case parse stringLit inp of
-    Just (STRING lit, []) -> lit
+parseStrLiteral inp = case parse stringLit (strSrc inp) of
+    Just (STRING lit, (S [] _)) -> lit
     _ -> error "Unexpected scanner output"
 
-parseKeywords inp = case parse keywords inp of
-    Just (kword, []) -> kword
+parseKeywords inp = case parse keywords (strSrc inp) of
+    Just (kword, (S [] _)) -> kword
     _ -> error "Unexpected scanner output"
 
-parseWspace inp = case parse whitespace inp of
-    Just (wspace, []) -> wspace
+parseWspace inp = case parse whitespace (strSrc inp) of
+    Just (wspace, (S [] _)) -> wspace
     _ -> error "Unexpected scanner output"
 
 testSymbol xs t = testPass xs "scans symbol" parseSymbol (const t)
