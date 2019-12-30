@@ -27,70 +27,97 @@ type Column = Int
 type Line = Int
 type Filename = String
 
-data Metadata = MData Column Line Filename deriving Show
+data Metadata = Meta Column Line Filename deriving Show
 instance Eq Metadata where
-    (==) (MData c l f) (MData c2 l2 f2) = c == c2 && l == l2 && f == f2
+    (==) (Meta c l f) (Meta c2 l2 f2) = c == c2 && l == l2 && f == f2
 
-incCol (MData c l f) = MData (c + 1) l f
-incLine (MData c l f) = MData 0 (l + 1) f
+incCol (Meta c l f) = Meta (c + 1) l f
+decCol (Meta c l f) = Meta (c - 1) l f
+incLine (Meta c l f) = Meta 0 (l + 1) f
 
 data Source = S String Metadata deriving Show
 
 instance Eq Source where
     (==) (S x m1) (S y m2) = x == y && m1 == m2
 
-newtype Parser a = P (Source -> Maybe (a, Source))
+newtype Parser a = P (Source -> Either (a, Source) Metadata)
 
 instance Functor Parser where
     -- fmap :: (a -> b) -> Parser a -> Parser b
     fmap f p = P (\inp -> case parse p inp of
-                    Nothing -> Nothing
-                    Just (v, rest) -> Just (f v, rest)
+                    Right m -> Right m
+                    Left (v, rest) -> Left (f v, rest)
                     )
 
 instance Applicative Parser where
     -- pure :: a -> Parser a
-    pure v = P (\(S inp m) -> Just (v, S inp m))
+    pure v = P (\inp -> Left (v, inp))
     -- <*> :: Parser (a -> b) -> Parser a -> Parser b
     pg <*> px = P (\inp -> case parse pg inp of
-                    Nothing -> Nothing
-                    Just (v, rest) -> parse (fmap v px) rest
+                    Right m -> Right m
+                    Left (v, rest) -> parse (fmap v px) rest
                     )
 
 instance Monad Parser where
     -- p >>= f :: Parser a -> (a -> Parer b) -> Parser b
     p >>= f = P(\inp -> case parse p inp of
-                Nothing -> Nothing
-                Just (v, rest) -> parse (f v) rest
+                    Right m -> Right m
+                    Left (v, rest) -> parse (f v) rest
                 )
 
 instance Alternative Parser where
     -- empty :: Parser a
-    empty = P (\inp -> Nothing)
+    empty = P (\(S inp m) -> Right (decCol m))
     -- (<|>) :: Parser a -> Parser a -> Parser a
     p <|> q = P (\inp -> case parse p inp of 
-                    Nothing -> parse q inp
-                    Just (v, out) -> Just (v, out)
+                    Right m -> parse q inp
+                    Left (v, out) -> Left (v, out)
                 )
 
 -- Extract the parser from P and apply it to inp
-parse :: Parser a -> Source -> Maybe (a, Source)
+parse :: Parser a -> Source -> Either (a, Source) Metadata
 parse (P p) src = p src
 
--- Return first value
-item :: Parser Char
+-- Consume one Char
+item :: Parser (Char, Metadata)
 item = P (\inp -> case inp of
-            (S [] m) -> Nothing
-            -- (S (x:xs) m) -> Just (x, S xs (incCol m))
+            (S [] m) -> Right m
             (S (x:xs) m) -> case x of
                 '\r' -> case xs of
-                    ('\n':bs) -> Just (x, S bs (incLine m))
-                    _ -> Just (x, S xs (incLine m))
-                '\n' -> Just (x, S xs (incLine m))
-                _ -> Just (x, S xs (incCol m))
+                    ('\n':bs) -> Left ((x,m), S bs (incLine m))
+                    _ -> Left ((x,m), S xs (incLine m))
+                '\n' -> Left ((x,m), S xs (incLine m))
+                _ -> Left ((x,m), S xs (incCol m))
         )
 
-sat :: (Char -> Bool) -> Parser Char
+sat :: (Char -> Bool) -> Parser (Char, Metadata)
 sat p = do
-        x <- item
-        if p x then return x else empty
+        (x, m) <- item
+        if p x
+        then return (x,m)
+        else empty
+
+tryChar :: Char -> Parser (Char, Metadata)
+tryChar x = sat (== x)
+
+whitespace :: Parser (Char, Metadata)
+whitespace = tryChar ' '
+
+newline :: Parser (Char, Metadata)
+newline = tryChar '\r' <|> tryChar '\n'
+
+alphanum :: Parser (Char, Metadata)
+alphanum = sat Data.Char.isAlphaNum
+
+tryString :: String -> Parser (String, Metadata)
+tryString s = case s of
+        [] -> return ([], Meta 0 0 "")
+        x:xs -> tryStr (x:xs) (Meta 0 0 "")
+
+tryStr :: String -> Metadata -> Parser (String, Metadata)
+tryStr s m = case s of
+    [] -> return ([], m)
+    (x:xs) -> do
+        (_, m2) <- tryChar x
+        tryStr xs m2
+        return (x:xs, m2)

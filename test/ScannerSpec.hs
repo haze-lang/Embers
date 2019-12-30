@@ -1,3 +1,22 @@
+{-
+Copyright (C) 2019  Syed Moiz Ur Rehman
+
+This file is part of Embers.
+
+Embers is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+any later version.
+
+Embers is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with Embers.  If not, see <https://www.gnu.org/licenses/>.
+-}
+
 module ScannerSpec (scannerTest) where
     
 import Test.Hspec
@@ -7,36 +26,53 @@ import Frontend.Scanner
 
 testPass inp label f g = it ("scans " ++ label ++ " " ++ inp) $ f inp `shouldBe` g inp
 
-testFail inp label f = it ("doesn't scan " ++ label ++ " " ++ inp) $ f inp `shouldBe` ""
+testFail inp label f v = it ("doesn't scan " ++ label ++ " " ++ inp) $ f inp `shouldBe` v
 
-strSrc xs = S xs (MData 0 0 "")
+strSrc xs = S xs (Meta 0 0 "")
+
+miscError = error "Unexpected scanner output."
+
+testMeta :: Metadata -> Metadata -> Int -> Int -> a -> a
+testMeta tm lm len ln val = case tm of
+    Meta 0 0 "" -> case lm of
+        Meta c l "" -> if c == len && l == ln
+            then val
+            else error "Invalid position in leftover metadata."
+        _ -> error "Invalid leftover metadata."
+    
+    _ -> error "Invalid token metadata."
+
+-- Might want to extract the patterns in below parseX functions. 
 
 parseSymbol inp = case parse symbols (strSrc inp) of
-  Just (t, (S [] _)) -> t
-  _ -> error "Unexpected scanner output."
+    Left (T t m, S [] m2) -> testMeta m m2 (length inp) 0 t
+    _ -> miscError
 
 parseIdent inp = case parse ident (strSrc inp) of
-    Just (t, (S [] _)) -> case t of
-        IDENTIFIER name -> name
-        _ -> error "Unexpected scanner output"
-    
-    Nothing -> ""
+    Left ((T t m), (S [] m2)) -> case t of
+        IDENTIFIER name -> testMeta m m2 (length inp) 0 name
+        _ -> miscError
+    Right _ -> ""
         
 parseNumLiteral inp = case parse numberLit (strSrc inp) of
-    Just (NUMBER lit, (S [] _)) -> lit
-    _ -> error "Unexpected scanner output"
+    Left (T (NUMBER lit) m, S [] m2) -> testMeta m m2 (length inp) 0 lit
+    _ -> miscError
 
 parseStrLiteral inp = case parse stringLit (strSrc inp) of
-    Just (STRING lit, (S [] _)) -> lit
-    _ -> error "Unexpected scanner output"
+    Left (T (STRING lit) m, S [] m2) -> testMeta m m2 (length inp) 0 lit
+    _ -> miscError
 
 parseKeywords inp = case parse keywords (strSrc inp) of
-    Just (kword, (S [] _)) -> kword
-    _ -> error "Unexpected scanner output"
+    Left (T kword m, S [] m2) -> testMeta m m2 (length inp) 0 kword
+    _ -> miscError
 
-parseWspace inp = case parse whitespace (strSrc inp) of
-    Just (wspace, (S [] _)) -> wspace
-    _ -> error "Unexpected scanner output"
+parseSpace inp = case parse wspace (strSrc inp) of
+    Left (T wspace m, S [] m2) -> testMeta m m2 (length inp) 0 wspace
+    _ -> miscError
+
+parseLine inp = case parse wspace (strSrc inp) of
+    Left (T wspace m, S [] m2) -> testMeta m m2 0 1 wspace
+    _ -> miscError
 
 testSymbol xs t = testPass xs "scans symbol" parseSymbol (const t)
 
@@ -50,11 +86,16 @@ testStrLiteral xs = testPass xs "string literal" parseStrLiteral (\xs -> take (l
 
 testKeyword xs t = testPass xs "keyword" parseKeywords (const t)
 
-testSpace xs = testPass xs "space" parseWspace (const (WHITESPACE Space))
-testNewline xs = testPass xs "newline" parseWspace (const (WHITESPACE Newline))
+testSpace xs = testPass xs "space" parseSpace (const (WHITESPACE Space))
+testNewline xs = testPass xs "newline" parseLine (const (WHITESPACE Newline))
+
+testScanner xs tk = testPass xs "scans stream" (tokenTypes.scan) (const tk)
+    where
+        tokenTypes :: [Token] -> [TokenType]
+        tokenTypes = foldl (\aux (T t _) -> aux ++ [t]) []
 
 scannerTest :: IO ()
-scannerTest = hspec $
+scannerTest = hspec $ do
     describe "Individual Tokens" $ do
         testSymbol "X" CROSS
         testSymbol "()" UNIT
@@ -74,13 +115,16 @@ scannerTest = hspec $
         testKeyword "record" RECORD
         testKeyword "switch" SWITCH
         testSpace " "
+        testSpace "  "
         testNewline "\n"
         testNewline "\r"
         testNewline "\r\n"
         testIdentPass "Asdasd"
         testIdentPass "asdasd"
         testIdentPass "asdasd1123"
-        testIdentFail "_sdasd"
-        testIdentFail "1sdasd"
+        testIdentFail "_sdasd" ""
+        testIdentFail "1sdasd" ""
         testNumLiteral "123123"
         testStrLiteral "\"asd\""
+    describe "Token Stream" $ do
+        testScanner "((\n))" [LPAREN,LPAREN,RPAREN,RPAREN]

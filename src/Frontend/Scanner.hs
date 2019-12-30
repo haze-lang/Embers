@@ -26,51 +26,58 @@ import qualified Data.Char
 
 data Newline = Linebreak deriving Show
 
-data Whitespace = Space | Newline deriving Show
+data Whitespace = Space | Newline deriving (Show,Eq)
 
-data Token = TYPE | RECORD | IF | THEN | ELSE | SWITCH      -- Keywords
+data TokenType = TYPE | RECORD | IF | THEN | ELSE | SWITCH      -- Keywords
             | EQUALS | COLON | ARROW | LPAREN | RPAREN | LBRACE | RBRACE | DARROW | BSLASH | CROSS | UNIT | TERMINATOR   -- Symbols
             | FUNCTION String | TYPENAME String | IDENTIFIER String -- Identifiers
             | NUMBER Int | STRING String                -- Literals
             | WHITESPACE Whitespace                     -- Space/Newline
             | COMMENT
-            | Invalid Metadata deriving Show
+            | Invalid deriving (Show,Eq)
+
+data Token = T TokenType Metadata deriving Show
 
 -- |Scans the given string and returns list of tokens.
 scan :: String -> [Token]
-scan src = scanInit $ S src (MData 0 0 "")
+scan src = scanInit $ S src (Meta 0 0 "")
 
 scanInit :: Source -> [Token]
 scanInit src = case src of 
     (S [] _) -> []
     _ -> case parse wspace src of
-        Just (_, r) -> scanUtil r
-        Nothing -> scanUtil src
+        Left (t, S [] _) -> [t]
+        Left (_, rest) -> scanUtil rest
+        Right _ -> scanUtil src
 
 scanUtil :: Source -> [Token]
 scanUtil xs = case parse symbolsLiterals xs of
-    Just (t, (S [] _)) -> [t]
-    Just (t, rest) -> t : scanInit rest
+    Left (t, (S [] _)) -> [t]
+    Left (t, rest) -> t : scanInit rest
 
-    Nothing -> case parse ident xs of
-        Just (ident, (S [] _)) -> case parse keywords xs of
-                        Just (keyword, (S [] _)) -> [keyword]
-                        _ -> [ident]
-        Just (ident, rest) -> case parse keywords xs of
-                        Just (keyword, (S [] _)) -> [keyword]
-                        Just (keyword, rest2) -> if rest == rest2 then keyword : scanInit rest2 else ident : scanInit rest
-                        Nothing -> ident : scanInit rest
-        Nothing -> Invalid (MData 0 0 "") : scanInit (drop1 1 xs) -- Error
+    Right _ -> case parse ident xs of
+        Left (ident, (S [] _)) -> case parse keywords xs of
+            Left (keyword, (S [] _)) -> [keyword]
+            _ -> [ident]
+        Left (ident, rest) -> case parse keywords xs of
+            Left (keyword, (S [] _)) -> [keyword]
+            Left (keyword, rest2) -> if rest == rest2 
+                then keyword : scanInit rest2
+                else ident : scanInit rest
+            Right _ -> ident : scanInit rest
+        Right m -> (T Invalid m) : scanInit (dropSource 1 xs) -- Error
+        where
+            dropSource :: Int -> Source -> Source
+            dropSource n src = case src of
+                S (x:xs) m -> S (drop n (x:xs)) (incCol m)
+                S [] m -> S [] m
 
-drop1 :: Int -> Source -> Source
-drop1 n src = case src of
-    S (x:xs) m -> S (drop n (x:xs)) (incCol m)
-    S [] m -> S [] m
+keyword :: String -> TokenType -> Parser Token
+keyword word t = do
+    (x,m) <- tryString word
+    return $ T t m
 
-wspace :: Parser Token
-wspace = do
-    some whitespace
-    return (WHITESPACE Space)
+wspace = space <|> line
 
 symbolsLiterals = symbols <|> literals
 
@@ -79,38 +86,6 @@ literals = numberLit <|> stringLit
 keywords = _type <|> record <|> _if <|> _then <|> _else <|> switch
 
 symbols =  terminator <|> bslash <|> cross <|> unit <|> darrow <|> equals <|> colon <|> arrow <|> lparen <|> rparen <|> lbrace <|> rbrace
-
-tokenString :: Token -> String
-tokenString t = case t of
-    FUNCTION f -> f
-    TYPENAME t -> t
-    IDENTIFIER i -> i
-    STRING s -> s
-    NUMBER n -> show n
-    WHITESPACE w -> case w of
-                    Space -> " "
-                    Newline -> "\r\n"
-    TERMINATOR -> "Terminator"
-    x -> show x
-
-tryChar :: Char -> Parser Char
-tryChar x = sat (== x)
-
-tryString :: String -> Parser String
-tryString s = case s of
-        [] -> return []
-        x:xs -> do
-            tryChar x
-            tryString xs
-            return (x:xs)
-
-alphanum :: Parser Char
-alphanum = sat Data.Char.isAlphaNum
-
-keyword :: String -> Token -> Parser Token
-keyword word t = do
-                tryString word
-                return t
 
 _type = keyword "type" TYPE
 record = keyword "record" RECORD
@@ -137,80 +112,62 @@ memberName = ident
 
 ident :: Parser Token
 ident = do
-    x <- alpha -- <|> char '_'
+    (x,m) <- alpha -- <|> char '_'
     xs <- many alphanum
-    return (IDENTIFIER (x:xs))
-
-alpha :: Parser Char
-alpha = sat Data.Char.isAlpha
-
-digit :: Parser Char
-digit = sat Data.Char.isDigit
+    if null xs
+        then return (T (IDENTIFIER [x]) m)
+        else case charCombine xs of
+            (s, m2) -> return (T (IDENTIFIER (x:s)) m)
 
 numberLit :: Parser Token
 numberLit = do
         _ <- tryChar '-'
         x <- some digit
-        return (NUMBER (-(read x)))
-        <|>
-        do
+        case charCombine x of
+            (s,m) -> return (T (NUMBER (-(read s))) m)
+        <|> do
             x <- some digit
-            return (NUMBER (read x))
+            case charCombine x of
+                (s,m) -> return (T (NUMBER (read s)) m)
 
 stringLit :: Parser Token
 stringLit = do
-        _ <- tryChar '"'
+        (_,m) <- tryChar '"'
         x <- many alphanum
         _ <- tryChar '"'
-        return (STRING x)
+        case charCombine x of
+            (s,_) -> return (T (STRING s) m)
 
 terminator :: Parser Token
 terminator = do
-            _ <- tryChar ';'
-            return TERMINATOR
+            (_,m) <- tryChar ';'
+            return (T TERMINATOR m)
 
-whitespace :: Parser Token
-whitespace = do
-            _ <- tryChar ' '
-            return (WHITESPACE Space)
-            <|> newline
+space :: Parser Token
+space = do
+    ws <- some whitespace
+    case charCombine ws of
+        (_, m) -> return (T (WHITESPACE Space) m)
 
-newline :: Parser Token
--- newline = P (\inp -> case inp of
---     (S [] m) -> Nothing
---     (S (x:xs) m) -> case x of
---         '\r' -> case xs of
---             ('\n':bs) -> Just (WHITESPACE Newline, S bs (incLine m))
---             _ -> Just (WHITESPACE Newline, S xs (incLine m))
---         '\n' -> Just (WHITESPACE Newline, S xs (incLine m))
---         _ -> Nothing
---         )
-newline = do
-        -- _ <- tryChar '\r'
-        -- _ <- tryChar '\n'
-        -- return (WHITESPACE Newline)
-        -- <|> do
-            _ <- tryChar '\r' <|> tryChar '\n'
-            return (WHITESPACE Newline)
+line :: Parser Token
+line = do
+    nl <- some newline
+    case charCombine nl of
+        (_, m) -> return (T (WHITESPACE Newline) m)
 
-instance Eq Token where
-    (==) TYPE TYPE = True
-    (==) RECORD RECORD = True
-    (==) IF IF = True
-    (==) THEN THEN = True
-    (==) ELSE ELSE = True
-    (==) SWITCH SWITCH = True
-    (==) CROSS CROSS = True
-    (==) UNIT UNIT = True
-    (==) EQUALS EQUALS = True
-    (==) COLON COLON = True
-    (==) ARROW ARROW = True
-    (==) DARROW DARROW = True
-    (==) BSLASH BSLASH = True
-    (==) LPAREN LPAREN = True
-    (==) RPAREN RPAREN = True
-    (==) LBRACE LBRACE = True
-    (==) RBRACE RBRACE = True
-    (==) (WHITESPACE Space) (WHITESPACE Space) = True
-    (==) (WHITESPACE Newline) (WHITESPACE Newline) = True
-    (==) _ _ = False
+alpha :: Parser (Char, Metadata)
+alpha = sat Data.Char.isAlpha
+
+digit :: Parser (Char, Metadata)
+digit = sat Data.Char.isDigit
+
+charCombine :: [(Char, Metadata)] -> ([Char], Metadata)
+charCombine l = case l of
+    ((c, m):xs) -> foo l "" m
+    -- [] -> ("",Meta 0 0 "")
+    where
+        foo :: [(Char, Metadata)] -> [Char] -> Metadata -> ([Char], Metadata)
+        foo l r m = case l of
+            ((c,_):[]) -> ((r ++ [c]), m)
+            ((c,_):xs) -> foo xs (r ++ [c]) m
+            -- [] ->  (r,m)
