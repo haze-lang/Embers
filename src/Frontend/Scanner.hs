@@ -24,9 +24,9 @@ import Frontend.AbstractParser
 import Control.Applicative
 import qualified Data.Char
 
-data Newline = Linebreak deriving Show
+-- data Newline = Linebreak deriving Show
 
-data Whitespace = Space | Newline deriving (Show,Eq)
+data Whitespace = Space | Tab | Newline deriving (Show,Eq)
 
 data TokenType = TYPE | RECORD | IF | THEN | ELSE | SWITCH      -- Keywords
             | EQUALS | COLON | ARROW | LPAREN | RPAREN | LBRACE | RBRACE | DARROW | BSLASH | CROSS | UNIT | TERMINATOR   -- Symbols
@@ -45,8 +45,8 @@ scan src = scanInit $ S src (Meta 0 0 "")
 scanInit :: Source -> [Token]
 scanInit src = case src of 
     (S [] _) -> []
-    _ -> case parse wspace src of
-        Left (t, S [] _) -> [t]
+    _ -> case parse (many wspace) src of
+        Left (ts, S [] _) -> concat ts
         Left (_, rest) -> scanUtil rest
         Right _ -> scanUtil src
 
@@ -74,10 +74,10 @@ scanUtil xs = case parse symbolsLiterals xs of
 
 keyword :: String -> TokenType -> Parser Token
 keyword word t = do
-    (x,m) <- tryString word
+    (x, m) <- tryString word
     return $ T t m
 
-wspace = space <|> line
+wspace = some space <|> some tab <|> some line
 
 symbolsLiterals = symbols <|> literals
 
@@ -112,7 +112,7 @@ memberName = ident
 
 ident :: Parser Token
 ident = do
-    (x,m) <- alpha -- <|> char '_'
+    (x, m) <- alpha -- <|> char '_'
     xs <- many alphanum
     if null xs
         then return (T (IDENTIFIER [x]) m)
@@ -124,36 +124,45 @@ numberLit = do
         _ <- tryChar '-'
         x <- some digit
         case charCombine x of
-            (s,m) -> return (T (NUMBER (-(read s))) m)
+            (s, m) -> return (T (NUMBER (-(read s))) m)
         <|> do
             x <- some digit
             case charCombine x of
-                (s,m) -> return (T (NUMBER (read s)) m)
+                (s, m) -> return (T (NUMBER (read s)) m)
 
 stringLit :: Parser Token
 stringLit = do
-        (_,m) <- tryChar '"'
+        (_, m) <- tryChar '"'
         x <- many alphanum
         _ <- tryChar '"'
         case charCombine x of
-            (s,_) -> return (T (STRING s) m)
+            (s, _) -> return (T (STRING s) m)
 
 terminator :: Parser Token
 terminator = do
-            (_,m) <- tryChar ';'
+            (_, m) <- tryChar ';'
             return (T TERMINATOR m)
 
 space :: Parser Token
 space = do
-    ws <- some whitespace
-    case charCombine ws of
-        (_, m) -> return (T (WHITESPACE Space) m)
+    (ws, m) <- whitespace
+    return (T (WHITESPACE Space) m)
+    -- case charCombine ws of
+        -- (_, m) -> return (T (WHITESPACE Space) m)
+
+tab :: Parser Token
+tab = do
+    (t, m) <- horizontaltab
+    return (T (WHITESPACE Tab) m)
+    -- case charCombine t of
+        -- (_, m) -> return (T (WHITESPACE Tab) m)
 
 line :: Parser Token
 line = do
-    nl <- some newline
-    case charCombine nl of
-        (_, m) -> return (T (WHITESPACE Newline) m)
+    (nl, m) <- newline
+    return (T (WHITESPACE Newline) m)
+    -- case charCombine nl of
+        -- (_, m) -> return (T (WHITESPACE Newline) m)
 
 alpha :: Parser (Char, Metadata)
 alpha = sat Data.Char.isAlpha
@@ -164,10 +173,10 @@ digit = sat Data.Char.isDigit
 charCombine :: [(Char, Metadata)] -> ([Char], Metadata)
 charCombine l = case l of
     ((c, m):xs) -> foo l "" m
-    -- [] -> ("",Meta 0 0 "")
+    [] -> ("", Meta 0 0 "")
     where
         foo :: [(Char, Metadata)] -> [Char] -> Metadata -> ([Char], Metadata)
         foo l r m = case l of
-            ((c,_):[]) -> ((r ++ [c]), m)
-            ((c,_):xs) -> foo xs (r ++ [c]) m
+            ((c, _):[]) -> ((r ++ [c]), m)
+            ((c, _):xs) -> foo xs (r ++ [c]) m
             -- [] ->  (r,m)

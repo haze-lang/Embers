@@ -103,6 +103,9 @@ tryChar x = sat (== x)
 whitespace :: Parser (Char, Metadata)
 whitespace = tryChar ' '
 
+horizontaltab :: Parser (Char, Metadata)
+horizontaltab = tryChar '\t'
+
 newline :: Parser (Char, Metadata)
 newline = tryChar '\r' <|> tryChar '\n'
 

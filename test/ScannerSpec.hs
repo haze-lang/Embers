@@ -66,12 +66,16 @@ parseKeywords inp = case parse keywords (strSrc inp) of
     Left (T kword m, S [] m2) -> testMeta m m2 (length inp) 0 kword
     _ -> miscError
 
-parseSpace inp = case parse wspace (strSrc inp) of
-    Left (T wspace m, S [] m2) -> testMeta m m2 (length inp) 0 wspace
+parseSpace inp = case parse space (strSrc inp) of
+    Left (T ws m, S [] m2) -> testMeta m m2 (length inp) 0 ws
     _ -> miscError
 
-parseLine inp = case parse wspace (strSrc inp) of
-    Left (T wspace m, S [] m2) -> testMeta m m2 0 1 wspace
+parseTab inp = case parse tab (strSrc inp) of
+    Left (T tb m, S [] m2) -> testMeta m m2 (length inp) 0 tb
+    _ -> miscError
+
+parseLine inp = case parse line (strSrc inp) of
+    Left (T nl m, S [] m2) -> testMeta m m2 0 1 nl
     _ -> miscError
 
 testSymbol xs t = testPass xs "scans symbol" parseSymbol (const t)
@@ -87,6 +91,7 @@ testStrLiteral xs = testPass xs "string literal" parseStrLiteral (\xs -> take (l
 testKeyword xs t = testPass xs "keyword" parseKeywords (const t)
 
 testSpace xs = testPass xs "space" parseSpace (const (WHITESPACE Space))
+testTab xs = testPass xs "tab" parseTab (const (WHITESPACE Tab))
 testNewline xs = testPass xs "newline" parseLine (const (WHITESPACE Newline))
 
 testScanner xs tk = testPass xs "scans stream" (tokenTypes.scan) (const tk)
@@ -115,7 +120,7 @@ scannerTest = hspec $ do
         testKeyword "record" RECORD
         testKeyword "switch" SWITCH
         testSpace " "
-        testSpace "  "
+        testTab "\t"
         testNewline "\n"
         testNewline "\r"
         testNewline "\r\n"
@@ -128,3 +133,4 @@ scannerTest = hspec $ do
         testStrLiteral "\"asd\""
     describe "Token Stream" $ do
         testScanner "((\n))" [LPAREN,LPAREN,RPAREN,RPAREN]
+        testScanner "\t \t\t\n \n" [WHITESPACE Tab, WHITESPACE Space, WHITESPACE Tab, WHITESPACE Tab, WHITESPACE Newline, WHITESPACE Space, WHITESPACE Newline]
