@@ -24,17 +24,24 @@ import Frontend.AbstractParser
 import Control.Applicative
 import qualified Data.Char
 
--- data Newline = Linebreak deriving Show
-
 data Whitespace = Space | Tab | Newline deriving (Show,Eq)
 
-data TokenType = TYPE | RECORD | IF | THEN | ELSE | SWITCH      -- Keywords
+data Literal = NUMBER Int | STRING String deriving (Show,Eq)
+
+data Identifier = IDENTIFIER String deriving (Show,Eq)
+
+data ProcName = PROCEDURE String deriving (Show,Eq)
+data FuncName = FUNCTION String deriving (Show,Eq)
+data ParamName = PARAM String deriving (Show,Eq)
+data TypeName = TYPENAME String deriving (Show,Eq)
+
+data TokenType = TYPE | RECORD | IF | THEN | ELSE | SWITCH | DEFAULT    -- Keywords
             | EQUALS | COLON | ARROW | LPAREN | RPAREN | LBRACE | RBRACE | DARROW | BSLASH | CROSS | UNIT | TERMINATOR   -- Symbols
-            | FUNCTION String | TYPENAME String | IDENTIFIER String -- Identifiers
-            | NUMBER Int | STRING String                -- Literals
+            | TkProc ProcName | TkFunc FuncName | TkParam ParamName | TkType TypeName | TkIdent Identifier -- Identifiers
+            | TkLit Literal                             -- Literals
             | WHITESPACE Whitespace                     -- Space/Newline
             | COMMENT
-            | Invalid deriving (Show,Eq)
+            | Invalid String deriving (Show,Eq)
 
 data Token = T TokenType Metadata deriving Show
 
@@ -65,7 +72,7 @@ scanUtil xs = case parse symbolsLiterals xs of
                 then keyword : scanInit rest2
                 else ident : scanInit rest
             Right _ -> ident : scanInit rest
-        Right m -> (T Invalid m) : scanInit (dropSource 1 xs) -- Error
+        Right m -> (T (Invalid "") m) : scanInit (dropSource 1 xs) -- Error
         where
             dropSource :: Int -> Source -> Source
             dropSource n src = case src of
@@ -83,7 +90,7 @@ symbolsLiterals = symbols <|> literals
 
 literals = numberLit <|> stringLit
 
-keywords = _type <|> record <|> _if <|> _then <|> _else <|> switch
+keywords = _type <|> record <|> _if <|> _then <|> _else <|> switch <|> _default
 
 symbols =  terminator <|> bslash <|> cross <|> unit <|> darrow <|> equals <|> colon <|> arrow <|> lparen <|> rparen <|> lbrace <|> rbrace
 
@@ -93,6 +100,7 @@ _if = keyword "if" IF
 _then = keyword "then" THEN
 _else = keyword "else" ELSE
 switch = keyword "switch" SWITCH
+_default = keyword "default" DEFAULT
 cross = keyword "X" CROSS
 unit = keyword "()" UNIT
 equals = keyword "=" EQUALS
@@ -112,31 +120,33 @@ memberName = ident
 
 ident :: Parser Token
 ident = do
-    (x, m) <- alpha -- <|> char '_'
+    (x, m) <- alpha
     xs <- many alphanum
     if null xs
-        then return (T (IDENTIFIER [x]) m)
-        else case charCombine xs of
-            (s, m2) -> return (T (IDENTIFIER (x:s)) m)
+    then return (T (TkIdent $ IDENTIFIER [x]) m)
+    else case charCombine xs of
+            (s, m2) -> return (T (TkIdent $ IDENTIFIER (x:s)) m)
 
 numberLit :: Parser Token
 numberLit = do
         _ <- tryChar '-'
         x <- some digit
         case charCombine x of
-            (s, m) -> return (T (NUMBER (-(read s))) m)
+            (s, m) -> return (T (TkLit $ NUMBER (-(read s))) m)
         <|> do
             x <- some digit
             case charCombine x of
-                (s, m) -> return (T (NUMBER (read s)) m)
+                (s, m) -> return (T (TkLit $ NUMBER (read s)) m)
 
 stringLit :: Parser Token
 stringLit = do
         (_, m) <- tryChar '"'
-        x <- many alphanum
-        _ <- tryChar '"'
-        case charCombine x of
-            (s, _) -> return (T (STRING s) m)
+        do
+            x <- many alphanum
+            _ <- tryChar '"'
+            case charCombine x of
+                (s, _) -> return (T (TkLit $ STRING s) m)
+            <|> failToken "Mismatched \"." m
 
 terminator :: Parser Token
 terminator = do
@@ -147,22 +157,18 @@ space :: Parser Token
 space = do
     (ws, m) <- whitespace
     return (T (WHITESPACE Space) m)
-    -- case charCombine ws of
-        -- (_, m) -> return (T (WHITESPACE Space) m)
 
 tab :: Parser Token
 tab = do
     (t, m) <- horizontaltab
     return (T (WHITESPACE Tab) m)
-    -- case charCombine t of
-        -- (_, m) -> return (T (WHITESPACE Tab) m)
 
 line :: Parser Token
 line = do
     (nl, m) <- newline
     return (T (WHITESPACE Newline) m)
-    -- case charCombine nl of
-        -- (_, m) -> return (T (WHITESPACE Newline) m)
+
+failToken mes m = return (T (Invalid mes) m)
 
 alpha :: Parser (Char, Metadata)
 alpha = sat Data.Char.isAlpha

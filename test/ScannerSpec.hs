@@ -50,16 +50,16 @@ parseSymbol inp = case parse symbols (strSrc inp) of
 
 parseIdent inp = case parse ident (strSrc inp) of
     Left ((T t m), (S [] m2)) -> case t of
-        IDENTIFIER name -> testMeta m m2 (length inp) 0 name
+        TkIdent (IDENTIFIER name) -> testMeta m m2 (length inp) 0 name
         _ -> miscError
     Right _ -> ""
         
 parseNumLiteral inp = case parse numberLit (strSrc inp) of
-    Left (T (NUMBER lit) m, S [] m2) -> testMeta m m2 (length inp) 0 lit
+    Left (T (TkLit (NUMBER lit)) m, S [] m2) -> testMeta m m2 (length inp) 0 lit
     _ -> miscError
 
 parseStrLiteral inp = case parse stringLit (strSrc inp) of
-    Left (T (STRING lit) m, S [] m2) -> testMeta m m2 (length inp) 0 lit
+    Left (T (TkLit (STRING lit)) m, S [] m2) -> testMeta m m2 (length inp) 0 lit
     _ -> miscError
 
 parseKeywords inp = case parse keywords (strSrc inp) of
@@ -119,6 +119,7 @@ scannerTest = hspec $ do
         testKeyword "type" TYPE
         testKeyword "record" RECORD
         testKeyword "switch" SWITCH
+        testKeyword "default" DEFAULT
         testSpace " "
         testTab "\t"
         testNewline "\n"

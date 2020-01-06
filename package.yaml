@@ -21,8 +21,10 @@ description:         Please see the README on GitHub at <https://github.com/syp-
 
 dependencies:
 - base >= 4.7 && < 5
-- hspec
-- QuickCheck
+- hspec # X11 (MIT)
+- QuickCheck # BSD-3-Clause
+- optparse-applicative # BSD-3-Clause
+- semigroups # BSD-3-Clause
 
 library:
   source-dirs: src
