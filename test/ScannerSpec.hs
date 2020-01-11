@@ -22,13 +22,14 @@ module ScannerSpec (scannerTest) where
 import Test.Hspec
 import Test.QuickCheck
 import Frontend.AbstractParser
+import Frontend.SyntaxTree
 import Frontend.Scanner
 
 testPass inp label f g = it ("scans " ++ label ++ " " ++ inp) $ f inp `shouldBe` g inp
 
 testFail inp label f v = it ("doesn't scan " ++ label ++ " " ++ inp) $ f inp `shouldBe` v
 
-strSrc xs = S xs (Meta 0 0 "")
+strSrc xs = (xs, (Meta 0 0 ""))
 
 miscError = error "Unexpected scanner output."
 
@@ -45,37 +46,37 @@ testMeta tm lm len ln val = case tm of
 -- Might want to extract the patterns in below parseX functions. 
 
 parseSymbol inp = case parse symbols (strSrc inp) of
-    Left (T t m, S [] m2) -> testMeta m m2 (length inp) 0 t
+    Left (T t m, ([], m2)) -> testMeta m m2 (length inp) 0 t
     _ -> miscError
 
 parseIdent inp = case parse ident (strSrc inp) of
-    Left ((T t m), (S [] m2)) -> case t of
+    Left ((T t m), ([], m2)) -> case t of
         TkIdent (IDENTIFIER name) -> testMeta m m2 (length inp) 0 name
         _ -> miscError
     Right _ -> ""
         
 parseNumLiteral inp = case parse numberLit (strSrc inp) of
-    Left (T (TkLit (NUMBER lit)) m, S [] m2) -> testMeta m m2 (length inp) 0 lit
+    Left (T (TkLit (NUMBER lit)) m, ([], m2)) -> testMeta m m2 (length inp) 0 lit
     _ -> miscError
 
 parseStrLiteral inp = case parse stringLit (strSrc inp) of
-    Left (T (TkLit (STRING lit)) m, S [] m2) -> testMeta m m2 (length inp) 0 lit
+    Left (T (TkLit (STRING lit)) m, ([], m2)) -> testMeta m m2 (length inp) 0 lit
     _ -> miscError
 
 parseKeywords inp = case parse keywords (strSrc inp) of
-    Left (T kword m, S [] m2) -> testMeta m m2 (length inp) 0 kword
+    Left (T kword m, ([], m2)) -> testMeta m m2 (length inp) 0 kword
     _ -> miscError
 
 parseSpace inp = case parse space (strSrc inp) of
-    Left (T ws m, S [] m2) -> testMeta m m2 (length inp) 0 ws
+    Left (T ws m, ([], m2)) -> testMeta m m2 (length inp) 0 ws
     _ -> miscError
 
 parseTab inp = case parse tab (strSrc inp) of
-    Left (T tb m, S [] m2) -> testMeta m m2 (length inp) 0 tb
+    Left (T tb m, ([], m2)) -> testMeta m m2 (length inp) 0 tb
     _ -> miscError
 
 parseLine inp = case parse line (strSrc inp) of
-    Left (T nl m, S [] m2) -> testMeta m m2 0 1 nl
+    Left (T nl m, ([], m2)) -> testMeta m m2 0 1 nl
     _ -> miscError
 
 testSymbol xs t = testPass xs "scans symbol" parseSymbol (const t)
@@ -133,5 +134,6 @@ scannerTest = hspec $ do
         testNumLiteral "123123"
         testStrLiteral "\"asd\""
     describe "Token Stream" $ do
-        testScanner "((\n))" [LPAREN,LPAREN,RPAREN,RPAREN]
+        testScanner "((\r\n))" [LPAREN,LPAREN,WHITESPACE Newline,RPAREN,RPAREN]
         testScanner "\t \t\t\n \n" [WHITESPACE Tab, WHITESPACE Space, WHITESPACE Tab, WHITESPACE Tab, WHITESPACE Newline, WHITESPACE Space, WHITESPACE Newline]
+        testScanner "asd ddf" [(TkIdent (IDENTIFIER "asd")), WHITESPACE Space, (TkIdent (IDENTIFIER "ddf"))]
