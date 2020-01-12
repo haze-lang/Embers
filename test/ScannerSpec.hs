@@ -41,7 +41,7 @@ testMeta tm lm len ln val = case tm of
             else error "Invalid position in leftover metadata."
         _ -> error "Invalid leftover metadata."
     
-    _ -> error "Invalid token metadata."
+    _ -> error "Invalid token metadata. Beginning of token must be from column 0, line 0."
 
 -- Might want to extract the patterns in below parseX functions. 
 
@@ -61,6 +61,10 @@ parseNumLiteral inp = case parse numberLit (strSrc inp) of
 
 parseStrLiteral inp = case parse stringLit (strSrc inp) of
     Left (T (TkLit (STRING lit)) m, ([], m2)) -> testMeta m m2 (length inp) 0 lit
+    _ -> miscError
+
+parseUnitLiteral inp = case parse unitLit (strSrc inp) of
+    Left (T (TkLit UNIT) m, ([], m2)) -> testMeta m m2 (length inp) 0 UNIT
     _ -> miscError
 
 parseKeywords inp = case parse keywords (strSrc inp) of
@@ -89,6 +93,8 @@ testNumLiteral xs = testPass xs "number literal" parseNumLiteral read
 
 testStrLiteral xs = testPass xs "string literal" parseStrLiteral (\xs -> take (length xs - 2) (drop 1 xs))
 
+testUnitLiteral xs = testPass xs "unit literal" parseUnitLiteral (const UNIT)
+
 testKeyword xs t = testPass xs "keyword" parseKeywords (const t)
 
 testSpace xs = testPass xs "space" parseSpace (const (WHITESPACE Space))
@@ -104,7 +110,6 @@ scannerTest :: IO ()
 scannerTest = hspec $ do
     describe "Individual Tokens" $ do
         testSymbol "X" CROSS
-        testSymbol "()" UNIT
         testSymbol "=" EQUALS
         testSymbol ":" COLON
         testSymbol "->" ARROW
@@ -133,6 +138,7 @@ scannerTest = hspec $ do
         testIdentFail "1sdasd" ""
         testNumLiteral "123123"
         testStrLiteral "\"asd\""
+        testUnitLiteral "()"
     describe "Token Stream" $ do
         testScanner "((\r\n))" [LPAREN,LPAREN,WHITESPACE Newline,RPAREN,RPAREN]
         testScanner "\t \t\t\n \n" [WHITESPACE Tab, WHITESPACE Space, WHITESPACE Tab, WHITESPACE Tab, WHITESPACE Newline, WHITESPACE Space, WHITESPACE Newline]

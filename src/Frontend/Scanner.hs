@@ -66,13 +66,13 @@ keyword word t = do
 
 wspace = some space <|> some tab <|> some line
 
-symbolsLiterals = symbols <|> literals
+symbolsLiterals = literals <|> symbols
 
-literals = numberLit <|> stringLit
+literals = numberLit <|> stringLit <|> unitLit
 
 keywords = _type <|> record <|> _if <|> _then <|> _else <|> switch <|> _default
 
-symbols =  terminator <|> bslash <|> cross <|> unit <|> darrow <|> equals <|> colon <|> arrow <|> lparen <|> rparen <|> lbrace <|> rbrace
+symbols =  terminator <|> bslash <|> cross <|> darrow <|> equals <|> colon <|> arrow <|> lparen <|> rparen <|> lbrace <|> rbrace
 
 _type = keyword "type" TYPE
 record = keyword "record" RECORD
@@ -82,7 +82,6 @@ _else = keyword "else" ELSE
 switch = keyword "switch" SWITCH
 _default = keyword "default" DEFAULT
 cross = keyword "X" CROSS
-unit = keyword "()" UNIT
 equals = keyword "=" EQUALS
 colon = keyword ":" COLON
 arrow = keyword "->" ARROW
@@ -125,6 +124,12 @@ stringLit = do
             case charCombine x of
                 (s, _) -> return (T (TkLit $ STRING s) m)
             <|> failToken "Mismatched \"." m
+
+unitLit :: LexParser Token
+unitLit = do
+    (_, m) <- tryChar '('
+    (_, _) <- tryChar ')'
+    return (T (TkLit UNIT) m)
 
 terminator :: LexParser Token
 terminator = do

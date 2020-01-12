@@ -21,54 +21,56 @@ module Frontend.SyntaxTree where
 
 import Data.List.NonEmpty
 
-data Program = Program Procedure [Either Procedure Function]
+data Program = Program Procedure [Either Procedure Function] deriving Show
 
-data Procedure = Proc TypeSig Identifier [Identifier] Block
+data Procedure = Proc TypeSig Identifier [Identifier] Block deriving Show
 
-data TypeSig = TypeSig Identifier Mapping
+data TypeSig = TypeSig Identifier Mapping deriving Show
 
-data Block = Block (NonEmpty Statement)
+data Block = Block (NonEmpty Statement) deriving Show
 
-data Statement = Statement Expression
+data Statement = Statement Expression deriving Show
 
-data Function = Func TypeSig Identifier [Identifier] PureExpression
+data Function = Func TypeSig Identifier [Identifier] PureExpression deriving Show
 
-data Mapping = Mapping TypeSet [TypeSet]
+data Mapping = Mapping TypeSet [TypeSet] deriving Show
 
-data TypeSet = TypeSet Type [Type]
+data TypeSet = TypeSet Type [Type] deriving Show
 
-data Type = Type (Either Identifier Mapping)
+data Type = Type (Either Identifier Mapping) deriving Show
 
 data Expression = ProcExpr ProcInvoke
-                | GExpr GroupedExpression
+                | PExpr PureExpression
+                | GExpr GroupedExpression deriving Show
 
-data ProcInvoke = ProcInvoke Identifier (NonEmpty Expression)
+data ProcInvoke = ProcInvoke Identifier (NonEmpty Expression) deriving Show
 
-data GroupedExpression = GroupedExpression Expression
+data GroupedExpression = GroupedExpression Expression deriving Show
 
-data PureExpression = ExprApp FuncApplication 
+data PureExpression = ExprApp FuncApplication
                     | ExprSwitch SwitchExpr
                     | ExprCond ConditionalExpression
                     | ExprLambda LambdaExpr
                     | ExprIdent Identifier
-                    | ExprLit Literal
-                    | ExprUnit
+                    | ExprLit Literal deriving Show
 
-data ConditionalExpression = ConditionalExpr (PureExpression, PureExpression, PureExpression)
+data ConditionalExpression = ConditionalExpr (PureExpression, PureExpression, PureExpression) deriving Show
 
-data FuncApplication = FuncApp Identifier (NonEmpty PureExpression)
+data FuncApplication = FuncApp Identifier (NonEmpty PureExpression) deriving Show
 
-data SwitchExpr = SwitchExpr Identifier (NonEmpty (Pattern, PureExpression)) PureExpression
+data SwitchExpr = SwitchExpr PureExpression (NonEmpty (Pattern, PureExpression)) PureExpression deriving Show
 
 -- TODO
-data Pattern = Pat
+data Pattern = Pat Literal deriving Show
 
 data LambdaExpr = ProcLambdaExpr (Maybe [Identifier]) Block
-                | FuncLambdaExpr (Maybe [Identifier]) PureExpression
+                | FuncLambdaExpr (Maybe [Identifier]) PureExpression deriving Show
+
+-- Tokens
 
 data Whitespace = Space | Tab | Newline deriving (Show,Eq)
 
-data Literal = NUMBER Int | STRING String deriving (Show,Eq)
+data Literal = NUMBER Int | STRING String | UNIT deriving (Show,Eq)
 
 newtype Identifier = IDENTIFIER String deriving (Show,Eq)
 
@@ -78,13 +80,14 @@ newtype ParamName = PARAM String deriving (Show,Eq)
 newtype TypeName = TYPENAME String deriving (Show,Eq)
 
 data TokenType = TYPE | RECORD | IF | THEN | ELSE | SWITCH | DEFAULT    -- Keywords
-            | EQUALS | COLON | ARROW | LPAREN | RPAREN | LBRACE | RBRACE | DARROW | BSLASH | CROSS | UNIT | TERMINATOR   -- Symbols
+            | EQUALS | COLON | ARROW | LPAREN | RPAREN | LBRACE | RBRACE | DARROW | BSLASH | CROSS | TERMINATOR   -- Symbols
             | TkProc ProcName | TkFunc FuncName | TkParam ParamName | TkType TypeName | TkIdent Identifier -- Identifiers
             | TkLit Literal                             -- Literals
             | WHITESPACE Whitespace                     -- Space/Newline
             | COMMENT
             | Invalid String deriving (Show,Eq)
 
+data Token = T TokenType Metadata deriving Show
 
 type Column = Int
 type Line = Int
@@ -102,5 +105,3 @@ data StrSource = Str String Metadata deriving Show
 
 instance Eq StrSource where
     (==) (Str x m1) (Str y m2) = x == y && m1 == m2
-
-data Token = T TokenType Metadata deriving Show
