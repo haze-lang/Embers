@@ -18,6 +18,9 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
 import ScannerSpec
+import ParserSpec
 
 main :: IO ()
-main = scannerTest
+main = do
+    scannerTest
+    parserTest

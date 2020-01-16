@@ -155,6 +155,10 @@ failToken mes m = return (T (Invalid mes) m)
 
 type LexParser a = AbsParser String Metadata a
 
+isSpaceToken t = case t of
+    T (WHITESPACE Space) _ -> True
+    _ -> False
+
 -- Consume one Char
 item :: LexParser (Char, Metadata)
 item = P (\inp -> case inp of

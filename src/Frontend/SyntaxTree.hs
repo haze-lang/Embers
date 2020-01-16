@@ -21,50 +21,56 @@ module Frontend.SyntaxTree where
 
 import Data.List.NonEmpty
 
-data Program = Program Procedure [Either Procedure Function] deriving Show
+data Program = Program Procedure [Either Procedure Function] deriving (Show,Eq)
 
-data Procedure = Proc TypeSig Identifier [Identifier] Block deriving Show
+data Procedure = Proc TypeSig Identifier [Identifier] Block deriving (Show,Eq)
 
-data TypeSig = TypeSig Identifier Mapping deriving Show
+data Block = Block (NonEmpty Statement) deriving (Show,Eq)
 
-data Block = Block (NonEmpty Statement) deriving Show
+data Statement = StmtExpr Expression | StmtAssign Assignment deriving (Show,Eq)
 
-data Statement = Statement Expression deriving Show
+data Assignment = Assignment Identifier Expression deriving (Show,Eq)
 
-data Function = Func TypeSig Identifier [Identifier] PureExpression deriving Show
+data Function = Func TypeSig Identifier [Identifier] PureExpression deriving (Show,Eq)
 
-data Mapping = Mapping TypeSet [TypeSet] deriving Show
+data Type = RecType Record -- TODO
 
-data TypeSet = TypeSet Type [Type] deriving Show
+data Record = Record Identifier -- TODO
 
-data Type = Type (Either Identifier Mapping) deriving Show
+data TypeSig = TypeSig Identifier Mapping deriving (Show,Eq)
+
+data Mapping = Mapping TypeSet [TypeSet] deriving (Show,Eq)
+
+data TypeSet = TypeSet TypeUnit [TypeUnit] deriving (Show,Eq)
+
+data TypeUnit = TypeUnit (Either Identifier Mapping) deriving (Show,Eq)
 
 data Expression = ProcExpr ProcInvoke
                 | PExpr PureExpression
-                | GExpr GroupedExpression deriving Show
+                | GExpr GroupedExpression deriving (Show,Eq)
 
-data ProcInvoke = ProcInvoke Identifier (NonEmpty Expression) deriving Show
+data ProcInvoke = ProcInvoke Identifier (NonEmpty Expression) deriving (Show,Eq)
 
-data GroupedExpression = GroupedExpression Expression deriving Show
+data GroupedExpression = GroupedExpression Expression deriving (Show,Eq)
 
 data PureExpression = ExprApp FuncApplication
                     | ExprSwitch SwitchExpr
                     | ExprCond ConditionalExpression
                     | ExprLambda LambdaExpr
                     | ExprIdent Identifier
-                    | ExprLit Literal deriving Show
+                    | ExprLit Literal deriving (Show,Eq)
 
-data ConditionalExpression = ConditionalExpr (PureExpression, PureExpression, PureExpression) deriving Show
+data ConditionalExpression = ConditionalExpr PureExpression PureExpression PureExpression deriving (Show,Eq)
 
-data FuncApplication = FuncApp Identifier (NonEmpty PureExpression) deriving Show
+data FuncApplication = FuncApp Identifier (NonEmpty PureExpression) deriving (Show,Eq)
 
-data SwitchExpr = SwitchExpr PureExpression (NonEmpty (Pattern, PureExpression)) PureExpression deriving Show
+data SwitchExpr = SwitchExpr PureExpression (NonEmpty (Pattern, PureExpression)) PureExpression deriving (Show,Eq)
 
 -- TODO
-data Pattern = Pat Literal deriving Show
+data Pattern = Pat Literal deriving (Show,Eq)
 
 data LambdaExpr = ProcLambdaExpr (Maybe [Identifier]) Block
-                | FuncLambdaExpr (Maybe [Identifier]) PureExpression deriving Show
+                | FuncLambdaExpr (Maybe [Identifier]) PureExpression deriving (Show,Eq)
 
 -- Tokens
 
@@ -87,7 +93,7 @@ data TokenType = TYPE | RECORD | IF | THEN | ELSE | SWITCH | DEFAULT    -- Keywo
             | COMMENT
             | Invalid String deriving (Show,Eq)
 
-data Token = T TokenType Metadata deriving Show
+data Token = T TokenType Metadata deriving (Show,Eq)
 
 type Column = Int
 type Line = Int

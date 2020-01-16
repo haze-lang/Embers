@@ -19,8 +19,9 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 
 module Main where
 
-import System.IO    
-import Frontend.Scanner (scan)
+import System.IO
+import Frontend.Parser (parseTokens)
+import Frontend.Scanner (scan,isSpaceToken)
 import Options.Applicative
 import Args
 
@@ -30,7 +31,9 @@ prompt text = do
     hFlush stdout
     getLine
 
-file content = print (scan content)
+file path = do
+    content <- readFile path
+    print (parseTokens $ filter (not.isSpaceToken) $ scan content)
 
 repl = do
         input <- prompt "Embers>"
@@ -50,8 +53,7 @@ run (Args _ (Just l)) = case l of
     Conditions -> putConditions
 
 run (Args (Just (FileInput p)) _) = do
-    x <- readFile p
-    file x
+    file p
 
 run _ = repl
 
