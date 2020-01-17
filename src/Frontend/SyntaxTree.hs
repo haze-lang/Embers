@@ -23,7 +23,7 @@ import Data.List.NonEmpty
 
 data Program = Program Procedure [Either Procedure Function] deriving (Show,Eq)
 
-data Procedure = Proc TypeSig Identifier [Identifier] Block deriving (Show,Eq)
+data Procedure = Proc TypeSignature Identifier [Identifier] Block deriving (Show,Eq)
 
 data Block = Block (NonEmpty Statement) deriving (Show,Eq)
 
@@ -31,19 +31,15 @@ data Statement = StmtExpr Expression | StmtAssign Assignment deriving (Show,Eq)
 
 data Assignment = Assignment Identifier Expression deriving (Show,Eq)
 
-data Function = Func TypeSig Identifier [Identifier] PureExpression deriving (Show,Eq)
+data Function = Func TypeSignature Identifier [Identifier] PureExpression deriving (Show,Eq)
 
 data Type = RecType Record -- TODO
 
 data Record = Record Identifier -- TODO
 
-data TypeSig = TypeSig Identifier Mapping deriving (Show,Eq)
+data TypeSignature = TypeSig Identifier TypeExpression deriving (Show,Eq)
 
-data Mapping = Mapping TypeSet [TypeSet] deriving (Show,Eq)
-
-data TypeSet = TypeSet TypeUnit [TypeUnit] deriving (Show,Eq)
-
-data TypeUnit = TypeUnit (Either Identifier Mapping) deriving (Show,Eq)
+data TypeExpression = TMap TypeExpression TypeExpression | TSet TypeExpression TypeExpression | TName Identifier deriving (Show,Eq)
 
 data Expression = ProcExpr ProcInvoke
                 | PExpr PureExpression
@@ -86,7 +82,7 @@ newtype ParamName = PARAM String deriving (Show,Eq)
 newtype TypeName = TYPENAME String deriving (Show,Eq)
 
 data TokenType = TYPE | RECORD | IF | THEN | ELSE | SWITCH | DEFAULT    -- Keywords
-            | EQUALS | COLON | ARROW | LPAREN | RPAREN | LBRACE | RBRACE | DARROW | BSLASH | CROSS | TERMINATOR   -- Symbols
+            | EQUALS | COLON | ARROW | LPAREN | RPAREN | LBRACE | RBRACE | DARROW | BSLASH | CROSS | SEMICOLON   -- Symbols
             | TkProc ProcName | TkFunc FuncName | TkParam ParamName | TkType TypeName | TkIdent Identifier -- Identifiers
             | TkLit Literal                             -- Literals
             | WHITESPACE Whitespace                     -- Space/Newline

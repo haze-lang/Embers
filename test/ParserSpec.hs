@@ -26,63 +26,47 @@ import Frontend.AbstractParser
 import Frontend.SyntaxTree
 import Frontend.Parser
 
-testPass label f g = it ("parses " ++ label) $ f `shouldBe` g
+parseConditionalExpr = apply conditionalExpr
 
--- tokens [] aux = aux
--- tokens (tt:tts) aux = tokens tts (aux ++ [T (tt) (Meta 0 0 "")])
-tokens :: [TokenType] -> [Token]
-tokens = foldl (\aux tt -> aux ++ [T (tt) (Meta 0 0 "")]) []
+parseSwitchExpr = apply switchExpr
 
-result r = (Left (r, ([], (Meta 0 0 ""))))
+parseMapping = apply mapping
 
-apply p ts = parse p (tokens ts, Meta 0 0 "")
+parseTypeSignature = apply typeSig
 
-parseConditionalExpr e1 e2 e3 = apply conditionalExpr [IF, e1, THEN, e2, ELSE, e3]
+testConditionalExpr _case = testPass ("conditional expression: "++_case) parseConditionalExpr
 
-parseSwitchExpr e cases def = apply switchExpr ([SWITCH, e, (WHITESPACE Newline)] ++ (helper cases) ++ [DEFAULT, ARROW, def])
-    where
-        helper :: [(TokenType, TokenType)] -> [TokenType]
-        helper = foldl (\aux (t1, t2) -> aux ++ (t1 : ARROW : t2 : [TERMINATOR])) []
+testSwitchExpr _case = testPass ("switch expression: " ++ _case) parseSwitchExpr
 
-parseMapping xs = apply mapping xs
+testTypeExpression _case = testPass ("type expression: " ++ _case) parseMapping
 
-testConditionalExpr e1 e2 e3 = testPass "conditional expression" (parseConditionalExpr (TkLit e1) (TkLit e2) (TkLit e3)) $ result (ConditionalExpr (ExprLit e1) (ExprLit e2) (ExprLit e3))
-
-testSwitchExpr e cases def = testPass "switch expression" (parseSwitchExpr (TkIdent e) cases (TkLit def)) $ result (SwitchExpr (ExprIdent e) ((Pat $ NUMBER 0, ExprLit $ NUMBER 1) :| [(Pat $ NUMBER 1, ExprLit $ NUMBER 1)]) (ExprLit def))
-
-testMappingCross xs = testPass "mapping X operator" (parseMapping (tkInsert CROSS xs)) $ result (initConstruct (tkInsert CROSS xs))
-    where
-    initConstruct ((TkIdent x):ts) = (Mapping (TypeSet (TypeUnit (Left (x))) (construct ts)) [])
-        where
-        construct = foldl (\aux t -> case t of
-            TkIdent x -> aux ++ [TypeUnit (Left x)]
-            CROSS -> aux -- ignore
-            ) []
-
-testMappingArrow xs = testPass "mapping -> operator" (parseMapping (tkInsert ARROW xs)) $ result (initConstruct (tkInsert ARROW xs))
-    where
-    initConstruct ((TkIdent x):ts) = (Mapping (TypeSet (TypeUnit (Left (x))) []) (construct ts))
-        where
-        construct = foldl (\aux t -> case t of
-            TkIdent x -> aux ++ [TypeSet (TypeUnit (Left x)) []]
-            ARROW -> aux -- ignore
-            ) []
-
-tkInsert :: TokenType -> [TokenType] -> [TokenType]
-tkInsert sym xs = Prelude.init $ foldl (\aux t -> aux ++ (t : [sym])) [] xs
-
-tkIdent s = TkIdent $ IDENTIFIER s
-
-tkLit l = TkLit $ NUMBER l
+testTypeSignature _case = testPass ("type signature: " ++ _case) parseTypeSignature
 
 parserTest :: IO ()
 parserTest = hspec $ do
-    describe "Individual Nodes" $ do
-        testConditionalExpr (NUMBER 1) (NUMBER 1) (NUMBER 1)
-        testSwitchExpr (IDENTIFIER "x") [(tkLit 0, tkLit 1), (tkLit 1, tkLit 1)] (NUMBER 0)
-        testMappingCross [tkIdent "A"]
-        testMappingCross [tkIdent "A", tkIdent "B"]
-        testMappingCross [tkIdent "A", tkIdent "B", tkIdent "C"]
-        testMappingArrow [tkIdent "A"]
-        testMappingArrow [tkIdent "A", tkIdent "B"]
-        testMappingArrow [tkIdent "A", tkIdent "B", tkIdent "C"]
+    describe "Individual Productions" $ do
+        testConditionalExpr "usual" [IF, tkNum 1, THEN, tkNum 1, ELSE, tkNum 1] (ConditionalExpr (ExprLit $ num 1) (ExprLit $ num 1) (ExprLit $ num 1))
+        testSwitchExpr "usual" [SWITCH, tkIdent "x", WHITESPACE Newline, tkNum 0, ARROW, tkNum 1, SEMICOLON, tkNum 1, ARROW, tkNum 1, SEMICOLON, DEFAULT, ARROW, tkNum 0] (SwitchExpr (ExprIdent $ ide "x") ((Pat $ NUMBER 0, ExprLit $ NUMBER 1) :| [(Pat $ NUMBER 1, ExprLit $ NUMBER 1)]) (ExprLit $ num 0))
+        testTypeExpression "identifier" [tkIdent "A"] (TName $ ide "A")
+        testTypeExpression "A X B" [tkIdent "A", CROSS, tkIdent "B"] (TSet (TName $ ide "A") (TName $ ide "B"))
+        testTypeExpression "A X B X C"[tkIdent "A", CROSS, tkIdent "B", CROSS, tkIdent "C"] (TSet (TSet (TName $ ide "A") (TName $ ide "B")) (TName $ ide "C"))
+        testTypeExpression "A -> B" [tkIdent "A", ARROW, tkIdent "B"] (TMap (TName $ ide "A") (TName $ ide "B"))
+        testTypeExpression "A -> B -> C" [tkIdent "A", ARROW, tkIdent "B", ARROW, tkIdent "C"] (TMap (TMap (TName $ ide "A") (TName $ ide "B")) (TName $ ide "C"))
+        testTypeExpression "(A -> B) -> (C -> D)" [LPAREN, tkIdent "A", ARROW, tkIdent "B", RPAREN, ARROW, LPAREN, tkIdent "C", ARROW, tkIdent "D", RPAREN] (TMap (TMap (TName $ ide "A") (TName $ ide "B")) (TMap (TName $ ide "C") (TName $ ide "D")))
+        testTypeExpression "A X B -> C X D" [tkIdent "A", CROSS, tkIdent "B", ARROW, tkIdent "C", CROSS, tkIdent "D"] (TMap (TSet (TName $ ide "A") (TName $ ide "B")) (TSet (TName $ ide "C") (TName $ ide "D")))
+        testTypeSignature "Proc : A -> B" [tkIdent "Proc", COLON, tkIdent "A", ARROW, tkIdent "B"] (TypeSig (ide "Proc") (TMap (TName $ ide "A") (TName $ ide "B")))
+
+-- Helpers
+
+ide s = IDENTIFIER s
+num n = NUMBER n
+tkIdent s = TkIdent $ ide s
+tkNum n = TkLit $ num n
+tkLit l = TkLit $ NUMBER l
+result r = (Left (r, ([], (Meta 0 0 ""))))
+apply p ts = parse p (tokens ts, Meta 0 0 "")
+
+tokens :: [TokenType] -> [Token]
+tokens = foldl (\aux tt -> aux ++ [T (tt) (Meta 0 0 "")]) []
+
+testPass label p inp r = it ("parses " ++ label) $ (p inp) `shouldBe` (result r)

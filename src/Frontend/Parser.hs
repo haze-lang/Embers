@@ -67,44 +67,50 @@ function = do
     body <- pureExpression
     return (Func ts name params body)
 
-typeSig :: Parser TypeSig
+typeSig :: Parser TypeSignature
 typeSig = do
     var <- ident
     token COLON
     m <- mapping
     return (TypeSig var m)
 
-mapping :: Parser Mapping
+mapping :: Parser TypeExpression
 mapping = do
     t <- typeSet
     ts <- many mappingg
-    return (Mapping t ts)
+    return (leftAssociate (t:ts))
     where
-        mappingg :: Parser TypeSet
         mappingg = do
             token ARROW
             typeSet
+        leftAssociate xs = f (Prelude.reverse xs)
+            where
+                f (x:[]) = x
+                f (x:xs) = TMap (f xs) x
 
-typeSet :: Parser TypeSet
+typeSet :: Parser TypeExpression
 typeSet = do
     t <- _typeUnit
     ts <- many _typee
-    return (TypeSet t ts)
+    return (leftAssociate $ t:ts)
     where
-        _typee :: Parser TypeUnit
         _typee = do
             token CROSS
             _typeUnit
+        leftAssociate xs = f (Prelude.reverse xs)
+            where
+                f (x:[]) = x
+                f (x:xs) = TSet (f xs) x
 
-_typeUnit :: Parser TypeUnit
+_typeUnit :: Parser TypeExpression
 _typeUnit = do
     typeName <- ident
-    return (TypeUnit (Left typeName))
+    return (TName typeName)
     <|> do
         token LPAREN
         m <- mapping
         token RPAREN
-        return (TypeUnit (Right m))
+        return m
 
 block :: Parser Block
 block = do
@@ -112,7 +118,7 @@ block = do
     xs <- some (
         do
         s <- statement
-        token TERMINATOR
+        terminator
         return s)
     token RBRACE
     case xs of
@@ -202,12 +208,10 @@ switchExpr = do
     token SWITCH
     switch <- pureExpression
     token (WHITESPACE Newline)
-    -- token DARROW
     cases <- some _case
     token DEFAULT
     token ARROW
     def <- pureExpression
-    -- return (SwitchExpr (switch) ((Pat $ NUMBER 1, ExprLit $ NUMBER 1) :| []) (ExprLit $ NUMBER 0))
     case cases of
         (x:xs) -> return (SwitchExpr (switch) (x :| xs) def)
         [] -> empty
@@ -217,7 +221,7 @@ switchExpr = do
             p <- pattern
             token ARROW
             e <- pureExpression
-            token TERMINATOR
+            terminator
             return (p, e)
 
 lambdaExpr :: Parser LambdaExpr
@@ -247,6 +251,9 @@ pattern = do
 type Parser a = Frontend.AbstractParser.AbsParser [Token] Metadata a
 
 -- Helpers
+
+terminator :: Parser Token
+terminator = token SEMICOLON <|> token (WHITESPACE Newline)
 
 item :: Parser Token
 item = P (\inp -> case inp of

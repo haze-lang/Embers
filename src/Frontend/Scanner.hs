@@ -72,7 +72,7 @@ literals = numberLit <|> stringLit <|> unitLit
 
 keywords = _type <|> record <|> _if <|> _then <|> _else <|> switch <|> _default
 
-symbols =  terminator <|> bslash <|> cross <|> darrow <|> equals <|> colon <|> arrow <|> lparen <|> rparen <|> lbrace <|> rbrace
+symbols =  semicolon <|> bslash <|> cross <|> darrow <|> equals <|> colon <|> arrow <|> lparen <|> rparen <|> lbrace <|> rbrace
 
 _type = keyword "type" TYPE
 record = keyword "record" RECORD
@@ -131,10 +131,10 @@ unitLit = do
     (_, _) <- tryChar ')'
     return (T (TkLit UNIT) m)
 
-terminator :: LexParser Token
-terminator = do
+semicolon :: LexParser Token
+semicolon = do
             (_, m) <- tryChar ';'
-            return (T TERMINATOR m)
+            return (T SEMICOLON m)
 
 space :: LexParser Token
 space = do
