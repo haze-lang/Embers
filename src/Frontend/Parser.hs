@@ -64,7 +64,12 @@ function = do
     name <- ident
     params <- many ident
     token EQUALS
-    body <- pureExpression
+    body <- (do
+        app <- application
+        return (Left app) 
+        <|> do
+        pe <- pureExpression
+        return (Right pe))
     return (Func ts name params body)
 
 typeSig :: Parser TypeSignature
@@ -115,11 +120,13 @@ _typeUnit = do
 block :: Parser Block
 block = do
     token LBRACE
+    many wspace
     xs <- some (
         do
         s <- statement
         terminator
         return s)
+    many wspace
     token RBRACE
     case xs of
         (y:ys) -> return (Block (y :| ys))
@@ -130,33 +137,38 @@ statement = do
     a <- assignment
     return (StmtAssign a)
     <|> do
-        e <- expression
-        return (StmtExpr e)
+    e <- expression
+    return (StmtExpr e)
 
 assignment :: Parser Assignment
 assignment = do
     x <- ident
+    token EQUALS
     value <- expression
     return (Assignment x value)
 
 expression :: Parser Expression
 expression = do
-    pi <- procInvoke
-    return (ProcExpr pi)
+    app <- application
+    return (AExpr app)
     <|> do
-        pe <- pureExpression
-        return (PExpr pe)
-        <|> do
-            ge <- groupedExpression
-            return (GExpr ge)
+    pe <- pureExpression
+    return (PExpr pe)
+    <|> do
+    ge <- groupedExpression
+    return (GExpr ge)
 
-procInvoke :: Parser ProcInvoke
-procInvoke = do
-    procName <- ident
+application :: Parser Application
+application = do
+    x <- (do
+        pe <- pureExpression
+        return (Left pe)
+        <|> do
+        ge <- groupedExpression
+        return (Right ge))
     es <- some expression
     case es of
-        (x:xs) -> return (ProcInvoke procName (x :| xs))
-        _ -> empty
+        (y:ys) -> return (App x (y :| ys))
 
 groupedExpression :: Parser GroupedExpression
 groupedExpression = do
@@ -167,9 +179,6 @@ groupedExpression = do
 
 pureExpression :: Parser PureExpression
 pureExpression = do
-    fa <- funcApplication
-    return (ExprApp fa)
-    <|> do
     se <- switchExpr
     return (ExprSwitch se)
     <|> do
@@ -194,14 +203,6 @@ conditionalExpr = do
     token ELSE
     e3 <- pureExpression
     return (ConditionalExpr e1 e2 e3)
-
-funcApplication :: Parser FuncApplication
-funcApplication = do
-    x <- ident
-    many (token $ WHITESPACE Space)
-    e <- pureExpression
-    es <- many pureExpression
-    return (FuncApp x (e :| es))
 
 switchExpr :: Parser SwitchExpr
 switchExpr = do

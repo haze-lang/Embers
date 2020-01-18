@@ -31,7 +31,7 @@ data Statement = StmtExpr Expression | StmtAssign Assignment deriving (Show,Eq)
 
 data Assignment = Assignment Identifier Expression deriving (Show,Eq)
 
-data Function = Func TypeSignature Identifier [Identifier] PureExpression deriving (Show,Eq)
+data Function = Func TypeSignature Identifier [Identifier] (Either Application PureExpression) deriving (Show,Eq)
 
 data Type = RecType Record -- TODO
 
@@ -41,24 +41,21 @@ data TypeSignature = TypeSig Identifier TypeExpression deriving (Show,Eq)
 
 data TypeExpression = TMap TypeExpression TypeExpression | TSet TypeExpression TypeExpression | TName Identifier deriving (Show,Eq)
 
-data Expression = ProcExpr ProcInvoke
+data Expression = AExpr Application
                 | PExpr PureExpression
                 | GExpr GroupedExpression deriving (Show,Eq)
 
-data ProcInvoke = ProcInvoke Identifier (NonEmpty Expression) deriving (Show,Eq)
+data Application = App (Either PureExpression GroupedExpression) (NonEmpty Expression) deriving (Show,Eq)
 
 data GroupedExpression = GroupedExpression Expression deriving (Show,Eq)
 
-data PureExpression = ExprApp FuncApplication
-                    | ExprSwitch SwitchExpr
+data PureExpression = ExprSwitch SwitchExpr
                     | ExprCond ConditionalExpression
                     | ExprLambda LambdaExpr
                     | ExprIdent Identifier
                     | ExprLit Literal deriving (Show,Eq)
 
 data ConditionalExpression = ConditionalExpr PureExpression PureExpression PureExpression deriving (Show,Eq)
-
-data FuncApplication = FuncApp Identifier (NonEmpty PureExpression) deriving (Show,Eq)
 
 data SwitchExpr = SwitchExpr PureExpression (NonEmpty (Pattern, PureExpression)) PureExpression deriving (Show,Eq)
 
