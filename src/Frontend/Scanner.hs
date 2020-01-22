@@ -115,6 +115,15 @@ numberLit = do
             (n, m) <- digits
             return (T (TkLit $ NUMBER (read n)) m)
 
+charLit :: LexParser Token
+charLit = do
+    (_, m) <- tryChar '\''
+    do
+        (c, m2) <- alphanum
+        _ <- tryChar '\''
+        return (T (TkLit $ CHAR c) m)
+        <|> failToken "Mismatched \'." m
+
 stringLit :: LexParser Token
 stringLit = do
         (_, m) <- tryChar '"'

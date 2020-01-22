@@ -34,6 +34,8 @@ testExpression = testPass "expression: " expression
 
 testApplication = testPass "invocation/application" application
 
+testAssignment = testPass "assignment" assignment
+
 testStatement = testPass "statement" statement
 
 testTypeExpression = testPass "type expression" mapping
@@ -54,6 +56,7 @@ parserTest = hspec $ do
         testApplication "Print \"A\"" [tkIdent "Print", tkStr "A"] (App (Left $ ExprIdent $ ide "Print") ((PExpr $ ExprLit $ str "A") :| []))
         testApplication "(Print) \"A\"" [LPAREN, tkIdent "Print", RPAREN, tkStr "A"] (App (Right $ GroupedExpression $ PExpr $ ExprIdent $ ide "Print") ((PExpr $ ExprLit $ str "A") :| []))
         testExpression "Identifier" [tkIdent "Print"] (PExpr $ ExprIdent $ ide "Print")
+        testAssignment "Stream = FileStream ()" [tkIdent "Stream", EQUALS, tkIdent "FileStream", TkLit $ UNIT] (Assignment (ide "Stream") (AExpr $ App (Left $ ExprIdent $ ide "FileStream") ((PExpr $ ExprLit $ UNIT) :| [])))
         testStatement "Print \"A\"" [tkIdent "Print", tkStr "A"] (StmtExpr $ AExpr $ App (Left $ ExprIdent $ ide "Print") ((PExpr $ ExprLit $ str "A") :| []))
         testBlock "{\nPrint \"A\"\n}" [LBRACE, WHITESPACE Newline, tkIdent "Print", tkStr "A", WHITESPACE Newline, RBRACE] (Block ((StmtExpr $ AExpr $ App (Left $ ExprIdent $ ide "Print") ((PExpr $ ExprLit $ str "A") :| [])) :| []))
         testTypeExpression "identifier" [tkIdent "A"] (TName $ ide "A")

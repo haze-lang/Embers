@@ -59,6 +59,10 @@ parseNumLiteral inp = case parse numberLit (strSrc inp) of
     Left (T (TkLit (NUMBER lit)) m, ([], m2)) -> testMeta m m2 (length inp) 0 lit
     _ -> miscError
 
+parseCharLiteral inp = case parse charLit (strSrc inp) of
+    Left (T (TkLit (CHAR lit)) m, ([], m2)) -> testMeta m m2 (length inp) 0 lit
+    _ -> miscError
+
 parseStrLiteral inp = case parse stringLit (strSrc inp) of
     Left (T (TkLit (STRING lit)) m, ([], m2)) -> testMeta m m2 (length inp) 0 lit
     _ -> miscError
@@ -90,6 +94,8 @@ testIdentPass xs = testPass xs "identifier" parseIdent id
 testIdentFail xs = testFail xs "identifier" parseIdent
 
 testNumLiteral xs = testPass xs "number literal" parseNumLiteral read
+
+testCharLiteral xs = testPass xs "character literal" parseCharLiteral read
 
 testStrLiteral xs = testPass xs "string literal" parseStrLiteral (\xs -> take (length xs - 2) (drop 1 xs))
 
@@ -137,6 +143,8 @@ scannerTest = hspec $ do
         testIdentFail "_sdasd" ""
         testIdentFail "1sdasd" ""
         testNumLiteral "123123"
+        testCharLiteral "\'A\'"
+        testCharLiteral "\'0\'"
         testStrLiteral "\"asd\""
         testUnitLiteral "()"
     describe "Token Stream" $ do

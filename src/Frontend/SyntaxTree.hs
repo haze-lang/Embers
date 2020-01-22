@@ -27,7 +27,8 @@ data Procedure = Proc TypeSignature Identifier [Identifier] Block deriving (Show
 
 data Block = Block (NonEmpty Statement) deriving (Show,Eq)
 
-data Statement = StmtExpr Expression | StmtAssign Assignment deriving (Show,Eq)
+data Statement = StmtExpr Expression
+                | StmtAssign Assignment deriving (Show,Eq)
 
 data Assignment = Assignment Identifier Expression deriving (Show,Eq)
 
@@ -39,7 +40,9 @@ data Record = Record Identifier -- TODO
 
 data TypeSignature = TypeSig Identifier TypeExpression deriving (Show,Eq)
 
-data TypeExpression = TMap TypeExpression TypeExpression | TSet TypeExpression TypeExpression | TName Identifier deriving (Show,Eq)
+data TypeExpression = TMap TypeExpression TypeExpression
+                    | TSet TypeExpression TypeExpression
+                    | TName Identifier deriving (Show,Eq)
 
 data Expression = AExpr Application
                 | PExpr PureExpression
@@ -67,9 +70,14 @@ data LambdaExpr = ProcLambdaExpr (Maybe [Identifier]) Block
 
 -- Tokens
 
-data Whitespace = Space | Tab | Newline deriving (Show,Eq)
+data Whitespace = Space 
+                | Tab
+                | Newline deriving (Show,Eq)
 
-data Literal = NUMBER Int | STRING String | UNIT deriving (Show,Eq)
+data Literal = NUMBER Int
+            | CHAR Char
+            | STRING String
+            | UNIT deriving (Show,Eq)
 
 newtype Identifier = IDENTIFIER String deriving (Show,Eq)
 
