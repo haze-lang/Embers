@@ -73,7 +73,7 @@ literals = numberLit <|> stringLit <|> charLit <|> unitLit
 
 keywords = _type <|> record <|> _if <|> _then <|> _else <|> switch <|> _default
 
-symbols =  semicolon <|> bslash <|> cross <|> darrow <|> equals <|> colon <|> arrow <|> lparen <|> rparen <|> lbrace <|> rbrace
+symbols =  bar <|> semicolon <|> bslash <|> cross <|> darrow <|> equals <|> colon <|> arrow <|> lparen <|> rparen <|> lbrace <|> rbrace
 
 _type = keyword "type" TYPE
 record = keyword "record" RECORD
@@ -82,6 +82,7 @@ _then = keyword "then" THEN
 _else = keyword "else" ELSE
 switch = keyword "switch" SWITCH
 _default = keyword "default" DEFAULT
+bar = keyword "|" BAR
 cross = keyword "X" CROSS
 equals = keyword "=" EQUALS
 colon = keyword ":" COLON
@@ -192,6 +193,11 @@ item = P $ \inp -> case inp of
         _ -> Left (x, (Str xs (incCol m)))
 
 -- Helpers
+
+data StrSource = Str String Metadata deriving Show
+
+instance Eq StrSource where
+    (==) (Str x m1) (Str y m2) = x == y && m1 == m2
 
 sat :: (Char -> Bool) -> Lexer Char
 sat p = do

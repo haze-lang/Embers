@@ -48,6 +48,7 @@ testNewline xs = testPass xs "newline" parseLine (const (WHITESPACE Newline))
 scannerTest :: IO ()
 scannerTest = hspec $ do
     describe "Individual Tokens" $ do
+        testSymbol "|" BAR
         testSymbol "X" CROSS
         testSymbol "=" EQUALS
         testSymbol ":" COLON

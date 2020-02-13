@@ -37,7 +37,7 @@ newtype ParamName = PARAM String deriving (Show,Eq)
 newtype TypeName = TYPENAME String deriving (Show,Eq)
 
 data TokenType = TYPE | RECORD | IF | THEN | ELSE | SWITCH | DEFAULT    -- Keywords
-            | EQUALS | COLON | ARROW | LPAREN | RPAREN | LBRACE | RBRACE | DARROW | BSLASH | CROSS | SEMICOLON   -- Symbols
+            | BAR | EQUALS | COLON | ARROW | LPAREN | RPAREN | LBRACE | RBRACE | DARROW | BSLASH | CROSS | SEMICOLON   -- Symbols
             | TkProc ProcName | TkFunc FuncName | TkParam ParamName | TkType TypeName | TkIdent Identifier -- Identifiers
             | TkLit Literal                             -- Literals
             | WHITESPACE Whitespace                     -- Space/Newline
@@ -57,8 +57,3 @@ instance Eq Metadata where
 incCol (Meta c l f) = Meta (c + 1) l f
 decCol (Meta c l f) = Meta (c - 1) l f
 incLine (Meta c l f) = Meta 0 (l + 1) f
-
-data StrSource = Str String Metadata deriving Show
-
-instance Eq StrSource where
-    (==) (Str x m1) (Str y m2) = x == y && m1 == m2
