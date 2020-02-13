@@ -27,48 +27,49 @@ import qualified Data.Char
 
 -- |Scans the given string and returns list of tokens.
 scan :: String -> [Token]
-scan src = scanInit $ (src, (Meta 0 0 ""))
+scan inp = scanInit $ (Str inp (Meta 0 0 ""))
 
-scanInit :: (String, Metadata) -> [Token]
+scanInit :: StrSource -> [Token]
 scanInit src = case src of 
-    ([], _) -> []
+    (Str []  _) -> []
     _ -> case parse (many wspace) src of
-        Left (ts, ([], _)) -> concat ts
+        Left (ts, (Str [] _)) -> concat ts
         Left (ts, rest) -> (concat ts) ++ (scanUtil rest)
         Right _ -> scanUtil src
 
-scanUtil :: (String, Metadata) -> [Token]
+scanUtil :: StrSource -> [Token]
 scanUtil xs = case parse symbolsLiterals xs of
-    Left (t, ([], _)) -> [t]
+    Left (t, (Str [] _)) -> [t]
     Left (t, rest) -> t : scanInit rest
 
     Right _ -> case parse ident xs of
-        Left (ident, ([], _)) -> case parse keywords xs of
-            Left (keyword, ([], _)) -> [keyword]
+        Left (ident, (Str [] _)) -> case parse keywords xs of
+            Left (keyword, (Str [] _)) -> [keyword]
             _ -> [ident]
         Left (ident, rest) -> case parse keywords xs of
-            Left (keyword, ([], _)) -> [keyword]
+            Left (keyword, (Str [] _)) -> [keyword]
             Left (keyword, rest2) -> if rest == rest2 
                 then keyword : scanInit rest2
                 else ident : scanInit rest
             Right _ -> ident : scanInit rest
-        Right m -> (T (Invalid "") m) : scanInit (dropSource 1 xs) -- Error
+        Right (Str _ m) -> (T (Invalid "") m) : scanInit (dropSource 1 xs) -- Error
         where
-            dropSource :: Int -> (String, Metadata) -> (String, Metadata)
+            dropSource :: Int -> StrSource -> StrSource
             dropSource n src = case src of
-                ([], m) -> ([], m)
-                (xs, m) -> ((drop n xs), (incCol m))
+                (Str [] m) -> (Str [] m)
+                (Str xs m) -> (Str (drop n xs) (incCol m))
 
 keyword :: String -> TokenType -> LexParser Token
 keyword word t = do
-    (x, m) <- tryString word
+    m <- getMeta
+    x <- tryString word
     return $ T t m
 
 wspace = some space <|> some tab <|> some line
 
 symbolsLiterals = literals <|> symbols
 
-literals = numberLit <|> stringLit <|> unitLit
+literals = numberLit <|> stringLit <|> charLit <|> unitLit
 
 keywords = _type <|> record <|> _if <|> _then <|> _else <|> switch <|> _default
 
@@ -99,132 +100,131 @@ memberName = ident
 
 ident :: LexParser Token
 ident = do
-    (x, m) <- alpha
+    m <- getMeta
+    x <- alpha
     xs <- many alphanum
-    if null xs
-    then return (T (TkIdent $ IDENTIFIER [x]) m)
-    else case charCombine xs of
-            (s, m2) -> return (T (TkIdent $ IDENTIFIER (x:s)) m)
+    return (T (TkIdent $ IDENTIFIER (x:xs)) m)
 
 numberLit :: LexParser Token
 numberLit = do
-        _ <- tryChar '-'
-        (n, m) <- digits
+        m <- getMeta
+        tryChar '-'
+        n <- some digit
         return (T (TkLit $ NUMBER (-(read n))) m)
         <|> do
-            (n, m) <- digits
+            m <- getMeta
+            n <- some digit
             return (T (TkLit $ NUMBER (read n)) m)
 
 charLit :: LexParser Token
 charLit = do
-    (_, m) <- tryChar '\''
+    m <- getMeta
+    tryChar '\''
     do
-        (c, m2) <- alphanum
-        _ <- tryChar '\''
+        c <- alphanum
+        tryChar '\''
         return (T (TkLit $ CHAR c) m)
         <|> failToken "Mismatched \'." m
 
 stringLit :: LexParser Token
 stringLit = do
-        (_, m) <- tryChar '"'
-        do
-            x <- many alphanum
-            _ <- tryChar '"'
-            case charCombine x of
-                (s, _) -> return (T (TkLit $ STRING s) m)
-            <|> failToken "Mismatched \"." m
+    m <- getMeta
+    tryChar '"'
+    do
+        x <- many alphanum
+        tryChar '"'
+        return (T (TkLit $ STRING x) m)
+        <|> failToken "Mismatched \"." m
 
 unitLit :: LexParser Token
 unitLit = do
-    (_, m) <- tryChar '('
-    (_, _) <- tryChar ')'
+    m <- getMeta
+    tryChar '('
+    tryChar ')'
     return (T (TkLit UNIT) m)
 
 semicolon :: LexParser Token
 semicolon = do
-            (_, m) <- tryChar ';'
-            return (T SEMICOLON m)
+    m <- getMeta
+    tryChar ';'
+    return (T SEMICOLON m)
 
 space :: LexParser Token
 space = do
-    (ws, m) <- whitespace
+    m <- getMeta
+    ws <- whitespace
     return (T (WHITESPACE Space) m)
 
 tab :: LexParser Token
 tab = do
-    (t, m) <- horizontaltab
+    m <- getMeta
+    t <- horizontaltab
     return (T (WHITESPACE Tab) m)
 
 line :: LexParser Token
 line = do
-    (nl, m) <- newline
+    m <- getMeta
+    nl <- newline
     return (T (WHITESPACE Newline) m)
 
 failToken mes m = return (T (Invalid mes) m)
 
-type LexParser a = AbsParser String Metadata a
+type LexParser a = AbsParser StrSource a
+
+getMeta :: LexParser Metadata
+getMeta = P $ \src -> case src of
+    (Str str m) -> Left (m, src)
 
 isSpaceToken t = case t of
     T (WHITESPACE Space) _ -> True
     _ -> False
 
 -- Consume one Char
-item :: LexParser (Char, Metadata)
-item = P (\inp -> case inp of
-            ([], m) -> Right m
-            ((x:xs), m) -> case x of
+item :: LexParser Char
+item = P $ \inp -> case inp of
+            (Str [] m) -> Right inp
+            (Str (x:xs) m) -> case x of
                 '\r' -> case xs of
-                    ('\n':bs) -> Left ((x, m), (bs, incLine m))
-                    _ -> Left ((x,m), (xs, (incLine m)))
-                '\n' -> Left ((x,m), (xs, (incLine m)))
-                _ -> Left ((x,m), (xs, (incCol m)))
-        )
+                    ('\n':bs) -> Left (x, (Str bs (incLine m)))
+                    _ -> Left ((x, (Str xs (incLine m))))
+                '\n' -> Left (x, (Str xs (incLine m)))
+                _ -> Left (x, (Str xs (incCol m)))
 
-sat :: (Char -> Bool) -> LexParser (Char, Metadata)
+sat :: (Char -> Bool) -> LexParser Char
 sat p = do
-        (x, m) <- item
+        x <- item
         if p x
-        then return (x,m)
+        then return x
         else empty
 
-tryChar :: Char -> LexParser (Char, Metadata)
+tryChar :: Char -> LexParser Char
 tryChar x = sat (== x)
 
-whitespace :: LexParser (Char, Metadata)
+whitespace :: LexParser Char
 whitespace = tryChar ' '
 
-horizontaltab :: LexParser (Char, Metadata)
+horizontaltab :: LexParser Char
 horizontaltab = tryChar '\t'
 
-newline :: LexParser (Char, Metadata)
+newline :: LexParser Char
 newline = tryChar '\r' <|> tryChar '\n'
 
-alphanum :: LexParser (Char, Metadata)
+alphanum :: LexParser Char
 alphanum = sat Data.Char.isAlphaNum
 
-tryString :: String -> LexParser (String, Metadata)
-tryString s = case s of
-        [] -> return ([], Meta 0 0 "")
-        x:xs -> tryStr (x:xs) (Meta 0 0 "")
+tryString :: String -> LexParser String
+-- tryString :: String -> Lexer String
+tryString [] = return ""
+tryString (x:xs) = do
+    tryChar x
+    tryString xs
+    return (x:xs)
 
-tryStr :: String -> Metadata -> LexParser (String, Metadata)
-tryStr s m = case s of
-    [] -> return ([], m)
-    (x:xs) -> do
-        (_, m2) <- tryChar x
-        tryStr xs m2
-        return (x:xs, m2)
-
-alpha :: LexParser (Char, Metadata)
+alpha :: LexParser Char
 alpha = sat Data.Char.isAlpha
 
-digit :: LexParser (Char, Metadata)
+digit :: LexParser Char
 digit = sat Data.Char.isDigit
-
-digits = do
-    n <- some digit
-    case charCombine n of
-        (n, m) -> return (n, m)
 
 charCombine :: [(Char, Metadata)] -> ([Char], Metadata)
 charCombine l = case l of

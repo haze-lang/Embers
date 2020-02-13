@@ -34,9 +34,18 @@ data Assignment = Assignment Identifier Expression deriving (Show,Eq)
 
 data Function = Func TypeSignature Identifier [Identifier] (Either Application PureExpression) deriving (Show,Eq)
 
-data Type = RecType Record -- TODO
+-- data Type = TypeRec Record
+        -- | TypeSumProd SumType 
 
-data Record = Record Identifier -- TODO
+-- data Record = Record Identifier Identifier (NonEmpty RecordMember)
+
+data RecordMember = RecordMember Identifier Identifier 
+
+-- data SumType = SumType Identifier (NonEmpty TypeCons)
+
+data TypeCons = TypeCons Identifier [ProductType]
+
+data ProductType = PtoductType (NonEmpty Identifier)
 
 data TypeSignature = TypeSig Identifier TypeExpression deriving (Show,Eq)
 

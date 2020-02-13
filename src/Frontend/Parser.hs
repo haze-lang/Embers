@@ -27,25 +27,27 @@ import qualified Frontend.Scanner
 
 debugParser p str = parse p (Prelude.filter (not.Frontend.Scanner.isSpaceToken) $ Frontend.Scanner.scan str, Meta 0 0 "")
 
+initParserState tokens = tokens
+
 -- |Parses the given token stream and returns syntax tree.
 parseTokens :: [Token] -> Program
-parseTokens src = case parse program $ (src, (Meta 0 0 "")) of
-    Left (p, ([], m)) -> p
+parseTokens src = case parse program $ initParserState src of
+    Left (p, []) -> p
     Left (p, _) -> p
     Right _ -> error "Received nothing."
 
 program :: Parser Program
 program = do
-    main <- procedure
+    proc <- procedure
     rest <- many procFunc
-    return (Program main rest)
+    return (Program proc rest)
     where
         procFunc = do
             p <- procedure
             return (Left p)
             <|> do
-                f <- function
-                return (Right f)
+            f <- function
+            return (Right f)
 
 procedure :: Parser Procedure
 procedure = do
@@ -82,40 +84,28 @@ typeSig = do
 mapping :: Parser TypeExpression
 mapping = do
     t <- typeSet
-    ts <- many mappingg
-    return (leftAssociate (t:ts))
-    where
-        mappingg = do
+    ts <- many (do
             token ARROW
-            typeSet
-        leftAssociate xs = f (Prelude.reverse xs)
-            where
-                f (x:[]) = x
-                f (x:xs) = TMap (f xs) x
+            typeSet)
+    return (leftAssociate (t:ts) TMap)
 
 typeSet :: Parser TypeExpression
 typeSet = do
     t <- _typeUnit
-    ts <- many _typee
-    return (leftAssociate $ t:ts)
-    where
-        _typee = do
-            token CROSS
-            _typeUnit
-        leftAssociate xs = f (Prelude.reverse xs)
-            where
-                f (x:[]) = x
-                f (x:xs) = TSet (f xs) x
+    ts <- many (do
+                token CROSS
+                _typeUnit)
+    return (leftAssociate (t:ts) TSet)
 
 _typeUnit :: Parser TypeExpression
 _typeUnit = do
     typeName <- ident
     return (TName typeName)
     <|> do
-        token LPAREN
-        m <- mapping
-        token RPAREN
-        return m
+    token LPAREN
+    m <- mapping
+    token RPAREN
+    return m
 
 block :: Parser Block
 block = do
@@ -231,36 +221,36 @@ lambdaExpr = do
         do
         token BSLASH
         return Nothing
-        <|>
-            do
-            xs <- some ident
-            return (Just xs))
+        <|> do
+        xs <- some ident
+        return (Just xs))
     token DARROW
     do
         e <- pureExpression
         return (FuncLambdaExpr params e)
-        <|>
-            do
-            b <- block
-            return (ProcLambdaExpr params b)
+        <|> do
+        b <- block
+        return (ProcLambdaExpr params b)
 
 pattern :: Parser Pattern
 pattern = do
     lit <- literal
     return (Pat lit)
 
-type Parser a = Frontend.AbstractParser.AbsParser [Token] Metadata a
+type ParserState = [Token]
+
+type Parser a = Frontend.AbstractParser.AbsParser ParserState a
+
+-- State Manipulation
+item :: Parser Token
+item = P $ \inp -> case inp of
+            (x:xs) -> Left (x, xs)
+            a -> Right a
 
 -- Helpers
 
 terminator :: Parser Token
 terminator = token SEMICOLON <|> token (WHITESPACE Newline)
-
-item :: Parser Token
-item = P (\inp -> case inp of
-            ((x:xs), m) -> Left (x, (xs, m))
-            ([], m) -> Right m
-        )
 
 sat :: (TokenType -> Bool) -> Parser Token
 sat p = do
@@ -292,3 +282,8 @@ wspace = do
 
 token :: TokenType -> Parser Token
 token x = sat (== x)
+
+leftAssociate xs dataConstructor = f (Prelude.reverse xs)
+    where
+        f (x:[]) = x
+        f (x:xs) = dataConstructor (f xs) x

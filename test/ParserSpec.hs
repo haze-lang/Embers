@@ -79,8 +79,11 @@ tkIdent s = TkIdent $ ide s
 tkNum n = TkLit $ num n
 tkStr s = TkLit $ str s
 -- tkLit l = TkLit $ NUMBER l
-result r = Left (r, ([], Meta 0 0 ""))
-apply p ts = parse p (tokens ts, Meta 0 0 "")
+
+result r = Left (r, [])
+    -- Left (r, (Str [] (Meta 0 0 "")))
+
+apply p ts = parse p (tokens ts)
 
 tokens :: [TokenType] -> [Token]
 tokens = foldl (\aux tt -> aux ++ [T tt (Meta 0 0 "")]) []

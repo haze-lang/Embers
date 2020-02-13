@@ -25,68 +25,6 @@ import Frontend.AbstractParser
 import Frontend.SyntaxTree
 import Frontend.Scanner
 
-testPass inp label f g = it ("scans " ++ label ++ " " ++ inp) $ f inp `shouldBe` g inp
-
-testFail inp label f v = it ("doesn't scan " ++ label ++ " " ++ inp) $ f inp `shouldBe` v
-
-strSrc xs = (xs, (Meta 0 0 ""))
-
-miscError = error "Unexpected scanner output."
-
-testMeta :: Metadata -> Metadata -> Int -> Int -> a -> a
-testMeta tm lm len ln val = case tm of
-    Meta 0 0 "" -> case lm of
-        Meta c l "" -> if c == len && l == ln
-            then val
-            else error "Invalid position in leftover metadata."
-        _ -> error "Invalid leftover metadata."
-    
-    _ -> error "Invalid token metadata. Beginning of token must be from column 0, line 0."
-
--- Might want to extract the patterns in below parseX functions. 
-
-parseSymbol inp = case parse symbols (strSrc inp) of
-    Left (T t m, ([], m2)) -> testMeta m m2 (length inp) 0 t
-    _ -> miscError
-
-parseIdent inp = case parse ident (strSrc inp) of
-    Left ((T t m), ([], m2)) -> case t of
-        TkIdent (IDENTIFIER name) -> testMeta m m2 (length inp) 0 name
-        _ -> miscError
-    Right _ -> ""
-        
-parseNumLiteral inp = case parse numberLit (strSrc inp) of
-    Left (T (TkLit (NUMBER lit)) m, ([], m2)) -> testMeta m m2 (length inp) 0 lit
-    _ -> miscError
-
-parseCharLiteral inp = case parse charLit (strSrc inp) of
-    Left (T (TkLit (CHAR lit)) m, ([], m2)) -> testMeta m m2 (length inp) 0 lit
-    _ -> miscError
-
-parseStrLiteral inp = case parse stringLit (strSrc inp) of
-    Left (T (TkLit (STRING lit)) m, ([], m2)) -> testMeta m m2 (length inp) 0 lit
-    _ -> miscError
-
-parseUnitLiteral inp = case parse unitLit (strSrc inp) of
-    Left (T (TkLit UNIT) m, ([], m2)) -> testMeta m m2 (length inp) 0 UNIT
-    _ -> miscError
-
-parseKeywords inp = case parse keywords (strSrc inp) of
-    Left (T kword m, ([], m2)) -> testMeta m m2 (length inp) 0 kword
-    _ -> miscError
-
-parseSpace inp = case parse space (strSrc inp) of
-    Left (T ws m, ([], m2)) -> testMeta m m2 (length inp) 0 ws
-    _ -> miscError
-
-parseTab inp = case parse tab (strSrc inp) of
-    Left (T tb m, ([], m2)) -> testMeta m m2 (length inp) 0 tb
-    _ -> miscError
-
-parseLine inp = case parse line (strSrc inp) of
-    Left (T nl m, ([], m2)) -> testMeta m m2 0 1 nl
-    _ -> miscError
-
 testSymbol xs t = testPass xs "scans symbol" parseSymbol (const t)
 
 testIdentPass xs = testPass xs "identifier" parseIdent id
@@ -106,11 +44,6 @@ testKeyword xs t = testPass xs "keyword" parseKeywords (const t)
 testSpace xs = testPass xs "space" parseSpace (const (WHITESPACE Space))
 testTab xs = testPass xs "tab" parseTab (const (WHITESPACE Tab))
 testNewline xs = testPass xs "newline" parseLine (const (WHITESPACE Newline))
-
-testScanner xs tk = testPass xs "scans stream" (tokenTypes.scan) (const tk)
-    where
-        tokenTypes :: [Token] -> [TokenType]
-        tokenTypes = foldl (\aux (T t _) -> aux ++ [t]) []
 
 scannerTest :: IO ()
 scannerTest = hspec $ do
@@ -151,3 +84,68 @@ scannerTest = hspec $ do
         testScanner "((\r\n))" [LPAREN,LPAREN,WHITESPACE Newline,RPAREN,RPAREN]
         testScanner "\t \t\t\n \n" [WHITESPACE Tab, WHITESPACE Space, WHITESPACE Tab, WHITESPACE Tab, WHITESPACE Newline, WHITESPACE Space, WHITESPACE Newline]
         testScanner "asd ddf" [(TkIdent (IDENTIFIER "asd")), WHITESPACE Space, (TkIdent (IDENTIFIER "ddf"))]
+
+-- Helpers & Utility
+
+testScanner xs tk = testPass xs "scans stream" (tokenTypes.scan) (const tk)
+    where
+        tokenTypes :: [Token] -> [TokenType]
+        tokenTypes = foldl (\aux (T t _) -> aux ++ [t]) []
+
+testPass inp label f g = it ("scans " ++ label ++ " " ++ inp) $ f inp `shouldBe` g inp
+
+testFail inp label f v = it ("doesn't scan " ++ label ++ " " ++ inp) $ f inp `shouldBe` v
+
+strSrc xs = (Str xs (Meta 0 0 ""))
+
+miscError = error "Unexpected scanner output."
+
+testMeta :: Metadata -> Metadata -> Int -> Int -> a -> a
+testMeta tm lm len ln val = case tm of
+    Meta 0 0 "" -> case lm of
+        Meta c l "" -> if c == len && l == ln
+            then val
+            else error "Invalid position in leftover metadata."
+        _ -> error "Invalid leftover metadata."
+    
+    _ -> error "Invalid token metadata. Beginning of token must be from column 0, line 0."
+
+applyParseCol p inp = case parse p (strSrc inp) of
+    Left (T x m, (Str [] m2)) -> testMeta m m2 (length inp) 0 x
+    _ -> miscError
+
+applyParseLine p inp = case parse p (strSrc inp) of
+    Left (T x m, (Str [] m2)) -> testMeta m m2 0 1 x
+    _ -> miscError
+
+parseSymbol = applyParseCol symbols
+
+parseIdent inp = case parse ident (strSrc inp) of
+    Left ((T t m), (Str [] m2)) -> case t of
+        TkIdent (IDENTIFIER name) -> testMeta m m2 (length inp) 0 name
+        _ -> miscError
+    Right _ -> ""
+        
+parseNumLiteral inp = case parse numberLit (strSrc inp) of
+    Left (T (TkLit (NUMBER lit)) m, (Str [] m2)) -> testMeta m m2 (length inp) 0 lit
+    _ -> miscError
+
+parseCharLiteral inp = case parse charLit (strSrc inp) of
+    Left (T (TkLit (CHAR lit)) m, (Str [] m2)) -> testMeta m m2 (length inp) 0 lit
+    _ -> miscError
+
+parseStrLiteral inp = case parse stringLit (strSrc inp) of
+    Left (T (TkLit (STRING lit)) m, (Str [] m2)) -> testMeta m m2 (length inp) 0 lit
+    _ -> miscError
+
+parseUnitLiteral inp = case parse unitLit (strSrc inp) of
+    Left (T (TkLit UNIT) m, (Str [] m2)) -> testMeta m m2 (length inp) 0 UNIT
+    _ -> miscError
+
+parseKeywords = applyParseCol keywords
+
+parseSpace = applyParseCol space
+
+parseTab = applyParseCol tab
+
+parseLine = applyParseLine line
