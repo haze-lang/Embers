@@ -22,8 +22,8 @@ module ScannerSpec (scannerTest) where
 import Test.Hspec
 import Test.QuickCheck
 import Frontend.AbstractParser
-import Frontend.SyntaxTree
-import Frontend.Scanner
+import Frontend.LexicalAnalysis.Scanner
+import Frontend.LexicalAnalysis.Token
 
 testSymbol xs t = testPass xs "scans symbol" parseSymbol (const t)
 

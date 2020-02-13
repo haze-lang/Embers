@@ -17,15 +17,17 @@ You should have received a copy of the GNU General Public License
 along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
-module Frontend.Parser where
+module Frontend.SyntacticAnalysis.Parser where
 
-import Frontend.SyntaxTree
+import Frontend.SyntacticAnalysis.AbstractSyntaxTree
 import Frontend.AbstractParser
 import Control.Applicative
 import Data.List.NonEmpty
-import qualified Frontend.Scanner
+import Frontend.LexicalAnalysis.Token
+import qualified Frontend.LexicalAnalysis.Scanner
+import Frontend.LexicalAnalysis.Token
 
-debugParser p str = parse p (Prelude.filter (not.Frontend.Scanner.isSpaceToken) $ Frontend.Scanner.scan str, Meta 0 0 "")
+debugParser p str = parse p (Prelude.filter (not.Frontend.LexicalAnalysis.Scanner.isSpaceToken) $ Frontend.LexicalAnalysis.Scanner.scan str, Meta 0 0 "")
 
 initParserState tokens = tokens
 

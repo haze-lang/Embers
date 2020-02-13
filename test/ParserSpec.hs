@@ -23,8 +23,9 @@ import Test.Hspec
 import Data.List.NonEmpty
 import Test.QuickCheck
 import Frontend.AbstractParser
-import Frontend.SyntaxTree
-import Frontend.Parser
+import Frontend.LexicalAnalysis.Token
+import Frontend.SyntacticAnalysis.AbstractSyntaxTree
+import Frontend.SyntacticAnalysis.Parser
 
 testConditionalExpr = testPass "conditional expression" conditionalExpr
 
@@ -42,7 +43,7 @@ testTypeExpression = testPass "type expression" mapping
 
 testTypeSignature = testPass "type signature" typeSig
 
-testFunction = testPass "function" Frontend.Parser.function
+testFunction = testPass "function" Frontend.SyntacticAnalysis.Parser.function
 
 testProc = testPass "procedure" procedure
 

@@ -17,11 +17,11 @@ You should have received a copy of the GNU General Public License
 along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
-module Frontend.Scanner
+module Frontend.LexicalAnalysis.Scanner
 where
 
 import Frontend.AbstractParser
-import Frontend.SyntaxTree
+import Frontend.LexicalAnalysis.Token
 import Control.Applicative
 import qualified Data.Char
 
@@ -59,7 +59,7 @@ scanUtil xs = case parse symbolsLiterals xs of
                 (Str [] m) -> (Str [] m)
                 (Str xs m) -> (Str (drop n xs) (incCol m))
 
-keyword :: String -> TokenType -> LexParser Token
+keyword :: String -> TokenType -> Lexer Token
 keyword word t = do
     m <- getMeta
     x <- tryString word
@@ -98,14 +98,14 @@ param = ident
 typeName = ident
 memberName = ident
 
-ident :: LexParser Token
+ident :: Lexer Token
 ident = do
     m <- getMeta
     x <- alpha
     xs <- many alphanum
     return (T (TkIdent $ IDENTIFIER (x:xs)) m)
 
-numberLit :: LexParser Token
+numberLit :: Lexer Token
 numberLit = do
         m <- getMeta
         tryChar '-'
@@ -116,7 +116,7 @@ numberLit = do
             n <- some digit
             return (T (TkLit $ NUMBER (read n)) m)
 
-charLit :: LexParser Token
+charLit :: Lexer Token
 charLit = do
     m <- getMeta
     tryChar '\''
@@ -126,7 +126,7 @@ charLit = do
         return (T (TkLit $ CHAR c) m)
         <|> failToken "Mismatched \'." m
 
-stringLit :: LexParser Token
+stringLit :: Lexer Token
 stringLit = do
     m <- getMeta
     tryChar '"'
@@ -136,32 +136,32 @@ stringLit = do
         return (T (TkLit $ STRING x) m)
         <|> failToken "Mismatched \"." m
 
-unitLit :: LexParser Token
+unitLit :: Lexer Token
 unitLit = do
     m <- getMeta
     tryChar '('
     tryChar ')'
     return (T (TkLit UNIT) m)
 
-semicolon :: LexParser Token
+semicolon :: Lexer Token
 semicolon = do
     m <- getMeta
     tryChar ';'
     return (T SEMICOLON m)
 
-space :: LexParser Token
+space :: Lexer Token
 space = do
     m <- getMeta
     ws <- whitespace
     return (T (WHITESPACE Space) m)
 
-tab :: LexParser Token
+tab :: Lexer Token
 tab = do
     m <- getMeta
     t <- horizontaltab
     return (T (WHITESPACE Tab) m)
 
-line :: LexParser Token
+line :: Lexer Token
 line = do
     m <- getMeta
     nl <- newline
@@ -169,9 +169,11 @@ line = do
 
 failToken mes m = return (T (Invalid mes) m)
 
-type LexParser a = AbsParser StrSource a
+type Lexer a = AbsParser StrSource a
 
-getMeta :: LexParser Metadata
+-- State Manipulation
+
+getMeta :: Lexer Metadata
 getMeta = P $ \src -> case src of
     (Str str m) -> Left (m, src)
 
@@ -179,60 +181,49 @@ isSpaceToken t = case t of
     T (WHITESPACE Space) _ -> True
     _ -> False
 
--- Consume one Char
-item :: LexParser Char
+item :: Lexer Char
 item = P $ \inp -> case inp of
-            (Str [] m) -> Right inp
-            (Str (x:xs) m) -> case x of
-                '\r' -> case xs of
-                    ('\n':bs) -> Left (x, (Str bs (incLine m)))
-                    _ -> Left ((x, (Str xs (incLine m))))
-                '\n' -> Left (x, (Str xs (incLine m)))
-                _ -> Left (x, (Str xs (incCol m)))
+    (Str [] m) -> Right inp
+    (Str (x:xs) m) -> case x of
+        '\r' -> case xs of
+            ('\n':bs) -> Left (x, (Str bs (incLine m)))
+            _ -> Left ((x, (Str xs (incLine m))))
+        '\n' -> Left (x, (Str xs (incLine m)))
+        _ -> Left (x, (Str xs (incCol m)))
 
-sat :: (Char -> Bool) -> LexParser Char
+-- Helpers
+
+sat :: (Char -> Bool) -> Lexer Char
 sat p = do
         x <- item
         if p x
         then return x
         else empty
 
-tryChar :: Char -> LexParser Char
+tryChar :: Char -> Lexer Char
 tryChar x = sat (== x)
 
-whitespace :: LexParser Char
+whitespace :: Lexer Char
 whitespace = tryChar ' '
 
-horizontaltab :: LexParser Char
+horizontaltab :: Lexer Char
 horizontaltab = tryChar '\t'
 
-newline :: LexParser Char
+newline :: Lexer Char
 newline = tryChar '\r' <|> tryChar '\n'
 
-alphanum :: LexParser Char
+alphanum :: Lexer Char
 alphanum = sat Data.Char.isAlphaNum
 
-tryString :: String -> LexParser String
--- tryString :: String -> Lexer String
+tryString :: String -> Lexer String
 tryString [] = return ""
 tryString (x:xs) = do
     tryChar x
     tryString xs
     return (x:xs)
 
-alpha :: LexParser Char
+alpha :: Lexer Char
 alpha = sat Data.Char.isAlpha
 
-digit :: LexParser Char
+digit :: Lexer Char
 digit = sat Data.Char.isDigit
-
-charCombine :: [(Char, Metadata)] -> ([Char], Metadata)
-charCombine l = case l of
-    ((c, m):xs) -> foo l "" m
-    [] -> ("", Meta 0 0 "")
-    where
-        foo :: [(Char, Metadata)] -> [Char] -> Metadata -> ([Char], Metadata)
-        foo l r m = case l of
-            ((c, _):[]) -> ((r ++ [c]), m)
-            ((c, _):xs) -> foo xs (r ++ [c]) m
-            -- [] ->  (r,m)

@@ -20,8 +20,8 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 module Main where
 
 import System.IO
-import Frontend.Parser (parseTokens)
-import Frontend.Scanner (scan,isSpaceToken)
+import Frontend.SyntacticAnalysis.Parser (parseTokens)
+import Frontend.LexicalAnalysis.Scanner (scan,isSpaceToken)
 import Options.Applicative
 import Args
 

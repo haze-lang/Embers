@@ -20,7 +20,6 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 module Frontend.AbstractParser
 where
 
-import Frontend.SyntaxTree
 import Control.Applicative
 import Data.Char
 
