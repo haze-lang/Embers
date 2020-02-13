@@ -17,8 +17,7 @@ You should have received a copy of the GNU General Public License
 along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
-module Frontend.LexicalAnalysis.Token
-where
+module Frontend.LexicalAnalysis.Token where
 
 data Whitespace = Space 
                 | Tab

@@ -23,6 +23,7 @@ import Frontend.SyntacticAnalysis.AbstractSyntaxTree
 import Frontend.AbstractParser
 import Control.Applicative
 import Data.List.NonEmpty
+import Data.Either
 import Frontend.LexicalAnalysis.Token
 import qualified Frontend.LexicalAnalysis.Scanner
 import Frontend.LexicalAnalysis.Token
@@ -38,20 +39,42 @@ parseTokens src = case parse program $ initParserState src of
     Left (p, _) -> p
     Right _ -> error "Received nothing."
 
-program :: Parser Program
-program = do
-    proc <- procedure
-    rest <- many procFunc
-    return (Program proc rest)
-    where
-        procFunc = do
-            p <- procedure
-            return (Left p)
-            <|> do
-            f <- function
-            return (Right f)
+data ProcFuncType = Pr Procedure | Fu Function | Ty Type
 
-procedure :: Parser Procedure
+program = do
+-- (Type | Function)*
+    x <- many (do
+        t <- _type
+        return $ Left t
+        <|> do
+        f <- function
+        return $ Right f)
+
+    proc <- procedure
+
+-- (Procedure | Function | Type)*
+    rest <- many (do
+        p <- procedure
+        return $ Pr p
+        <|> do
+        f <- function
+        return $ Fu f
+        <|> do
+        t <- _type
+        return $ Ty t)
+
+    let (preTs, preFs) = partitionEithers x
+        (procedures, functions, types) = separate rest ([], [], [])
+    
+    return $ Program (preTs ++ types) (proc :| procedures) (preFs ++ functions)
+    
+    where
+        separate [] aux = aux
+        separate (x:xs) (ps, fs, ts) = separate xs $ case x of
+            Pr p -> (ps++[p], fs, ts)
+            Fu f -> (ps, fs++[f], ts)
+            Ty t -> (ps, fs, ts++[t])
+
 procedure = do
     ts <- typeSig
     token (WHITESPACE Newline)
@@ -60,6 +83,36 @@ procedure = do
     token (WHITESPACE Newline)
     body <- block
     return (Proc ts name params body)
+
+block :: Parser Block
+block = do
+    token LBRACE
+    many wspace
+    xs <- some (
+        do
+        s <- statement
+        terminator
+        return s)
+    many wspace
+    token RBRACE
+    case xs of
+        (y:ys) -> return (Block (y :| ys))
+        _ -> empty
+
+statement :: Parser Statement
+statement = do
+    a <- assignment
+    return (StmtAssign a)
+    <|> do
+    e <- expression
+    return (StmtExpr e)
+
+assignment :: Parser Assignment
+assignment = do
+    x <- ident
+    token EQUALS
+    value <- expression
+    return (Assignment x value)
 
 function :: Parser Function
 function = do
@@ -93,14 +146,14 @@ mapping = do
 
 typeSet :: Parser TypeExpression
 typeSet = do
-    t <- _typeUnit
+    t <- typeUnit
     ts <- many (do
                 token CROSS
-                _typeUnit)
+                typeUnit)
     return (leftAssociate (t:ts) TSet)
 
-_typeUnit :: Parser TypeExpression
-_typeUnit = do
+typeUnit :: Parser TypeExpression
+typeUnit = do
     typeName <- ident
     return (TName typeName)
     <|> do
@@ -109,35 +162,60 @@ _typeUnit = do
     token RPAREN
     return m
 
-block :: Parser Block
-block = do
-    token LBRACE
-    many wspace
-    xs <- some (
-        do
-        s <- statement
-        terminator
-        return s)
-    many wspace
-    token RBRACE
-    case xs of
-        (y:ys) -> return (Block (y :| ys))
-        _ -> empty
+-- Types
 
-statement :: Parser Statement
-statement = do
-    a <- assignment
-    return (StmtAssign a)
+_type :: Parser Type
+_type = do
+    s <- sumType
+    return $ TypeSumProd s
     <|> do
-    e <- expression
-    return (StmtExpr e)
+    r <- recordType
+    return $ TypeRec r
 
-assignment :: Parser Assignment
-assignment = do
-    x <- ident
+sumType :: Parser SumType
+sumType = do
+    token TYPE
+    name <- ident
     token EQUALS
-    value <- expression
-    return (Assignment x value)
+    p <- productType
+    ps <- many (do
+        token BAR
+        p2 <- productType
+        return p2)
+    return $ SumType name (p :| ps)
+
+productType :: Parser TypeCons
+productType = do
+    cons <- ident
+    operands <- (do
+        operand <- ident
+        operandList <- many (do
+            token CROSS
+            t <- ident
+            return t)
+        return (operand:operandList))
+    return $ TypeCons cons operands
+    <|> do
+    cons <- ident
+    return $ TypeCons cons []
+
+recordType :: Parser Record
+recordType = do
+    token RECORD
+    name <- ident
+    token EQUALS
+    constructor <- ident
+    token $ WHITESPACE Newline
+    members <- some (do
+        member <- ident
+        token COLON
+        memberType <- ident
+        terminator
+        return $ RecordMember member memberType)
+    let (x:xs) = members
+    return $ Record name constructor (x :| xs)
+
+-- Expressions
 
 expression :: Parser Expression
 expression = do

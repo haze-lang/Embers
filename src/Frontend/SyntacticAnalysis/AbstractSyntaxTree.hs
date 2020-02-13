@@ -22,7 +22,7 @@ module Frontend.SyntacticAnalysis.AbstractSyntaxTree where
 import Frontend.LexicalAnalysis.Token
 import Data.List.NonEmpty
 
-data Program = Program Procedure [Either Procedure Function] deriving (Show,Eq)
+data Program = Program [Type] (NonEmpty Procedure) [Function] deriving (Show,Eq)
 
 data Procedure = Proc TypeSignature Identifier [Identifier] Block deriving (Show,Eq)
 
@@ -35,18 +35,19 @@ data Assignment = Assignment Identifier Expression deriving (Show,Eq)
 
 data Function = Func TypeSignature Identifier [Identifier] (Either Application PureExpression) deriving (Show,Eq)
 
--- data Type = TypeRec Record
-        -- | TypeSumProd SumType 
+data Type = TypeRec Record
+        | TypeSumProd SumType 
+        deriving (Show,Eq)
 
--- data Record = Record Identifier Identifier (NonEmpty RecordMember)
+data Record = Record Identifier Identifier (NonEmpty RecordMember) deriving (Show,Eq)
 
-data RecordMember = RecordMember Identifier Identifier 
+data RecordMember = RecordMember Identifier Identifier deriving (Show,Eq)
 
--- data SumType = SumType Identifier (NonEmpty TypeCons)
+data SumType = SumType Identifier (NonEmpty TypeCons) deriving (Show,Eq)
 
-data TypeCons = TypeCons Identifier [ProductType]
+data TypeCons = TypeCons Identifier [Identifier] deriving (Show,Eq)
 
-data ProductType = PtoductType (NonEmpty Identifier)
+-- data ProductType = PtoductType (NonEmpty Identifier) deriving (Show,Eq)
 
 data TypeSignature = TypeSig Identifier TypeExpression deriving (Show,Eq)
 
