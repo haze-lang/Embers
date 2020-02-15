@@ -33,10 +33,10 @@ data Statement = StmtExpr Expression
 
 data Assignment = Assignment Identifier Expression deriving (Show,Eq)
 
-data Function = Func TypeSignature Identifier [Identifier] (Either Application PureExpression) deriving (Show,Eq)
+data Function = Func TypeSignature Identifier [Identifier] Expression deriving (Show,Eq)
 
 data Type = TypeRec Record
-        | TypeSumProd SumType 
+        | TypeSumProd SumType
         deriving (Show,Eq)
 
 data Record = Record Identifier Identifier (NonEmpty RecordMember) deriving (Show,Eq)
@@ -45,9 +45,8 @@ data RecordMember = RecordMember Identifier Identifier deriving (Show,Eq)
 
 data SumType = SumType Identifier (NonEmpty TypeCons) deriving (Show,Eq)
 
+-- Product Type
 data TypeCons = TypeCons Identifier [Identifier] deriving (Show,Eq)
-
--- data ProductType = PtoductType (NonEmpty Identifier) deriving (Show,Eq)
 
 data TypeSignature = TypeSig Identifier TypeExpression deriving (Show,Eq)
 
@@ -55,26 +54,30 @@ data TypeExpression = TMap TypeExpression TypeExpression
                     | TSet TypeExpression TypeExpression
                     | TName Identifier deriving (Show,Eq)
 
-data Expression = AExpr Application
-                | PExpr PureExpression
-                | GExpr GroupedExpression deriving (Show,Eq)
+data Expression = ExprApp ApplicationExpression
+                | ExprSwitch SwitchExpression
+                | ExprCond ConditionalExpression
+                | ExprLambda LambdaExpression
+                | ExprIdent Identifier
+                | ExprLit Literal
+                deriving (Show,Eq)
 
-data Application = App (Either PureExpression GroupedExpression) (NonEmpty Expression) deriving (Show,Eq)
+data ApplicationExpression = App Expression (NonEmpty Expression) deriving (Show,Eq)
 
-data GroupedExpression = GroupedExpression Expression deriving (Show,Eq)
+-- data GroupedExpression = GroupedExpression Expression deriving (Show,Eq)
 
-data PureExpression = ExprSwitch SwitchExpr
-                    | ExprCond ConditionalExpression
-                    | ExprLambda LambdaExpr
-                    | ExprIdent Identifier
-                    | ExprLit Literal deriving (Show,Eq)
+-- data PureExpression = ExprSwitch SwitchExpr
+                --     | ExprCond ConditionalExpression
+                --     | ExprLambda LambdaExpr
+                --     | ExprIdent Identifier
+                --     | ExprLit Literal deriving (Show,Eq)
 
-data ConditionalExpression = ConditionalExpr PureExpression PureExpression PureExpression deriving (Show,Eq)
+data ConditionalExpression = ConditionalExpr Expression Expression Expression deriving (Show,Eq)
 
-data SwitchExpr = SwitchExpr PureExpression (NonEmpty (Pattern, PureExpression)) PureExpression deriving (Show,Eq)
+data SwitchExpression = SwitchExpr Expression (NonEmpty (Pattern, Expression)) Expression deriving (Show,Eq)
 
 -- TODO
 data Pattern = Pat Literal deriving (Show,Eq)
 
-data LambdaExpr = ProcLambdaExpr (Maybe [Identifier]) Block
-                | FuncLambdaExpr (Maybe [Identifier]) PureExpression deriving (Show,Eq)
+data LambdaExpression = ProcLambda (Maybe [Identifier]) Block
+                | FuncLambda (Maybe [Identifier]) Expression deriving (Show,Eq)

@@ -121,12 +121,7 @@ function = do
     name <- ident
     params <- many ident
     token EQUALS
-    body <- (do
-        app <- application
-        return (Left app) 
-        <|> do
-        pe <- pureExpression
-        return (Right pe))
+    body <- (application <|> pureExpression)
     return (Func ts name params body)
 
 typeSig :: Parser TypeSignature
@@ -218,36 +213,23 @@ recordType = do
 -- Expressions
 
 expression :: Parser Expression
-expression = do
-    app <- application
-    return (AExpr app)
-    <|> do
-    pe <- pureExpression
-    return (PExpr pe)
-    <|> do
-    ge <- groupedExpression
-    return (GExpr ge)
+expression = application <|> pureExpression <|> groupedExpression
 
-application :: Parser Application
+application :: Parser Expression
 application = do
-    x <- (do
-        pe <- pureExpression
-        return (Left pe)
-        <|> do
-        ge <- groupedExpression
-        return (Right ge))
-    es <- some expression
-    case es of
-        (y:ys) -> return (App x (y :| ys))
+    callee <- (pureExpression <|> groupedExpression)
+    args <- some expression
+    let (e:es) = args
+    return (ExprApp $ App callee (e :| es))
 
-groupedExpression :: Parser GroupedExpression
+groupedExpression :: Parser Expression
 groupedExpression = do
     token LPAREN
     e <- expression
     token RPAREN
-    return (GroupedExpression e)
+    return e
 
-pureExpression :: Parser PureExpression
+pureExpression :: Parser Expression
 pureExpression = do
     se <- switchExpr
     return (ExprSwitch se)
@@ -274,7 +256,7 @@ conditionalExpr = do
     e3 <- pureExpression
     return (ConditionalExpr e1 e2 e3)
 
-switchExpr :: Parser SwitchExpr
+switchExpr :: Parser SwitchExpression
 switchExpr = do
     token SWITCH
     switch <- pureExpression
@@ -287,7 +269,7 @@ switchExpr = do
         (x:xs) -> return (SwitchExpr (switch) (x :| xs) def)
         [] -> empty
     where
-        _case :: Parser (Pattern, PureExpression)
+        _case :: Parser (Pattern, Expression)
         _case = do
             p <- pattern
             token ARROW
@@ -295,7 +277,7 @@ switchExpr = do
             terminator
             return (p, e)
 
-lambdaExpr :: Parser LambdaExpr
+lambdaExpr :: Parser LambdaExpression
 lambdaExpr = do
     params <- (
         do
@@ -307,10 +289,10 @@ lambdaExpr = do
     token DARROW
     do
         e <- pureExpression
-        return (FuncLambdaExpr params e)
+        return (FuncLambda params e)
         <|> do
         b <- block
-        return (ProcLambdaExpr params b)
+        return (ProcLambda params b)
 
 pattern :: Parser Pattern
 pattern = do
