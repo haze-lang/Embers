@@ -28,7 +28,8 @@ import Frontend.LexicalAnalysis.Token
 import qualified Frontend.LexicalAnalysis.Scanner
 import Frontend.LexicalAnalysis.Token
 
-debugParser p str = parse p (Prelude.filter (not.Frontend.LexicalAnalysis.Scanner.isSpaceToken) $ Frontend.LexicalAnalysis.Scanner.scan str, Meta 0 0 "")
+debugParser :: Parser a -> String -> Either (a, [Token]) [Token]
+debugParser p str = parse p (Prelude.filter (not.Frontend.LexicalAnalysis.Scanner.isSpaceToken) $ Frontend.LexicalAnalysis.Scanner.scan str)
 
 initParserState tokens = tokens
 

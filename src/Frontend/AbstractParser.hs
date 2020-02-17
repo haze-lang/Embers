@@ -17,6 +17,8 @@ You should have received a copy of the GNU General Public License
 along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
+-- This module is just a reimplementation of State monad.
+
 module Frontend.AbstractParser
 where
 
@@ -54,6 +56,12 @@ instance Alternative (AbsParser s) where
                     Right m -> parse q inp
                     Left (v, out) -> Left (v, out)
 
--- Extract the parser from P and apply it to inp
+-- | Extract the parser from P and apply it to inp
 parse :: AbsParser s a -> s -> Either (a, s) s
-parse (P p) src = p src
+parse (P p) = p
+
+-- | Extract state from parser
+getState = P(\state -> Left (state, state))
+
+-- empty :: AbsParser s a
+-- empty = Control.Applicative.empty
