@@ -56,12 +56,12 @@ instance Alternative (AbsParser s) where
                     Right m -> parse q inp
                     Left (v, out) -> Left (v, out)
 
--- | Extract the parser from P and apply it to inp
+-- | Extract the parser from P and apply it to inp.
 parse :: AbsParser s a -> s -> Either (a, s) s
 parse (P p) = p
 
--- | Extract state from parser
+-- | Extract state from parser.
 getState = P(\state -> Left (state, state))
 
--- empty :: AbsParser s a
--- empty = Control.Applicative.empty
+-- | Discard current state and set it to given argument.
+setState state = P(\_ -> Left ((), state))

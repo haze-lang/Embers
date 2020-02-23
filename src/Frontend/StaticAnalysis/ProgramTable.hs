@@ -22,104 +22,107 @@ where
 
 import Data.Map.Strict (Map)
 import Frontend.AbstractParser
+import Data.List.NonEmpty (NonEmpty((:|)))
 import qualified Data.Map.Strict as M
 import Frontend.LexicalAnalysis.Token
 
-type SymTable = M.Map Int TableEntry
+type Table = (NextID, SymTable)
+type NextID = ID
+type SymTable = M.Map NextID TableEntry
+type ID = Int
 
-initialize :: (Int, SymTable)
-initialize = case parse beginInit (0, M.fromList []) of
+data Scope = Scope ID
+            | Global deriving (Eq,Show)
+
+initializeTable :: Table
+initializeTable = case parse beginInit (0, M.fromList []) of
     Left (_, state) -> state
 
-beginInit :: TableManipulator ()
-beginInit = insertUnit
+beginInit = do
+    insertUnit
+    insertBool
+    insertChar
+    insertString
 
 -- Standard Library Initialization
 
-insertUnit :: TableManipulator ()
 insertUnit = do
-    unitId <- insertTableEntry $ AttrType "Unit" (SumType []) Nothing Nothing
-    consId <- insertTableEntry $ AttrProcFunc "Unit" (Just unitId) [] Nothing Nothing
-    updateTableEntry unitId (AttrType "Unit" (SumType [consId]) Nothing Nothing)
+    typeId <- insertTypeEntry "Unit" []
+    consId <- insertFuncEntry "Unit" typeId
+    updateTableEntry' typeId (EntryType "Unit" (getAbs "Unit") Global $ Def (True, SumType [consId], Nothing))
+
+insertBool = do
+    typeId <- insertTypeEntry "Bool" []
+    consId1 <- insertFuncEntry "True" typeId
+    consId2 <- insertFuncEntry "False" typeId
+    updateTableEntry' typeId (EntryType "Bool" (getAbs "Bool") Global $ Def (False, SumType [consId1, consId2], Nothing))
+
+insertChar = insertTypeEntry "Char" []
+
+insertString = insertTypeEntry "String" []
+
+insertTypeEntry name constructors = insertTableEntry' $ EntryType name (getAbs name) Global $ Def (False, SumType constructors, Nothing)
+
+insertFuncEntry name typeId = insertTableEntry' $ EntryFunc name (getAbs name) Global $ Def (typeId, [], Nothing)
+
+getAbs n = n :| ["Global"]
 
 -- Table Manipulation
 
-type TableManipulator a = AbsParser (Int, SymTable) a
+type TableManipulator a = AbsParser (NextID, SymTable) a
 
-insertTableEntry :: TableEntry -> TableManipulator Int
-insertTableEntry entry = P (\(id, table) ->
-    case insertTableEntry' id entry table of
+insertTableEntry' :: TableEntry -> TableManipulator ID
+insertTableEntry' entry = P (\(id, table) ->
+    case insertTableEntry id entry table of
         Just t -> Left (id, (id + 1, t))
         Nothing -> Right (id, table))
 
-updateTableEntry :: Int -> TableEntry -> TableManipulator ()
-updateTableEntry id newEntry = P (\(id', table) ->
-    case updateTableEntry' id newEntry table of
+updateTableEntry' :: ID -> TableEntry -> TableManipulator ()
+updateTableEntry' id newEntry = P (\(id', table) ->
+    case updateTableEntry id newEntry table of
         Just t -> Left ((), (id', t))
         Nothing -> Right (id', table))
 
 -- Table Helpers
 
 -- | Only inserts a value if key does not already exist.
-insertTableEntry' :: Int -> TableEntry -> SymTable -> Maybe SymTable
-insertTableEntry' id row table = case M.lookup id table of
+insertTableEntry :: ID -> TableEntry -> SymTable -> Maybe SymTable
+insertTableEntry id row table = case M.lookup id table of
     Nothing -> Just $ M.insert id row table
     Just a -> Nothing
 
 -- | Only updates the value if key exists.
-updateTableEntry' :: Int -> TableEntry -> SymTable -> Maybe SymTable
-updateTableEntry' id newEntry table = case M.lookup id table of
+updateTableEntry :: ID -> TableEntry -> SymTable -> Maybe SymTable
+updateTableEntry id newEntry table = case M.lookup id table of
     Just a -> Just $ M.insert id newEntry table -- Replaces old entry with new entry
     Nothing -> Nothing
 
+-- | Synonym for Map.lookup
+lookupTableEntry :: ID -> SymTable -> Maybe TableEntry
+lookupTableEntry = M.lookup
+
 -- Misc
 
-select :: a -> TableEntry -> TableEntry
-select x entry = AttrProcFunc "" (Just 0) [] Nothing Nothing
+type AbsoluteName = NonEmpty Name
+type Name = String
+type ReturnType = ID
+type Param = ID
+type VarType = ID
+type DataCons = ID
+type FieldVar = ID
+type FieldType = ID
+type SameNameCons = Bool
 
-isName name entry = case entry of
-    AttrProcFunc name' _ _ _ _ ->
-        if name == name'
-        then entry
-        else Empty
-
-nonIdLookup :: a -> (a -> TableEntry -> TableEntry) -> SymTable -> [(Int, TableEntry)]
-nonIdLookup target selector table = filter (\(id, val) -> case val of
-    Empty -> False
-    _ -> True) (M.toList $ M.map (selector target) table)
-
--- data SymbolTable = SymTbl [(Int, TableEntry)] | EmptyTab deriving (Show,Eq)
-
-data TableEntry = AttrProcFunc String (Maybe Int) [Int] (Maybe Int) (Maybe Metadata)       -- Name, Return Type (ID), Parameters (IDs), Parent Scope (ID)
-                | AttrVariable String (Maybe Int) (Maybe Int) (Maybe Metadata)         -- Name, Type (ID), Parent Scope (ID)
-                | AttrType String TypeEntry (Maybe Int) (Maybe Metadata)           -- Name, Parent Scope (ID)
-                | Empty
+                    -- Name, Return Type (ID), Parameters (IDs), Parent Scope
+data TableEntry = EntryProc Name AbsoluteName Scope (Definition (ReturnType, [Param], Maybe Metadata))
+                | EntryFunc Name AbsoluteName Scope (Definition (ReturnType, [Param], Maybe Metadata))
+                | EntryVar Name AbsoluteName Scope VarType (Maybe Metadata)         -- Name, Type (ID), Parent Scope (ID)
+                | EntryType Name AbsoluteName Scope (Definition (SameNameCons, TypeDef, Maybe Metadata))           -- Name, Parent Scope (ID)
                 deriving (Show,Eq)
 
--- type Entry = (Int, TableRow)
+data Definition a = Def a
+                | Undefined deriving (Show,Eq)
 
-data TypeEntry = RecType Int [Int] [Int]    -- Data Constructor (ID), Field Names (IDs), Field Types (IDs)
-                | SumType [Int]             -- Data Constructors (IDs)
+data TypeDef = RecType DataCons [FieldVar] [FieldType]    -- Data Constructor (ID), Field Names (IDs), Field Types (IDs)
+                | SumType [DataCons]             -- Data Constructors (IDs)
                  deriving (Show,Eq)
-
--- type ParserState = ([Token], Int, SymbolTable)
-
--- type Parser a = Frontend.AbstractParser.AbsParser ParserState a
-
--- -- State Manipulation
--- getId :: Parser Int
--- getId = P $ \(ts, id, t) -> Left (id, (ts, id+1, t))
-
--- tableLookup :: Int -> SymbolTable -> Maybe TableEntry
--- tableLookup id (SymTbl (entries)) = lookup id entries
-
--- insertEntry :: TableEntry -> Parser ()
--- insertEntry entry = P $ \(ts, id, t) -> Left ((), (ts, id+1, (insert' t id entry)))
---     where
---     insert' :: SymbolTable -> Int -> TableEntry -> SymbolTable
---     insert' (SymTbl entries) id entry = SymTbl (entries ++ [(id, entry)])
-
--- item :: Parser Token
--- item = P $ \inp -> case inp of
---             (x:xs, id, t) -> Left (x, (xs, id, t))
---             a -> Right a

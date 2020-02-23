@@ -22,9 +22,11 @@ module Frontend.SyntacticAnalysis.AbstractSyntaxTree where
 import Frontend.LexicalAnalysis.Token
 import Data.List.NonEmpty
 
-data Program = Program [Type] (NonEmpty Procedure) [Function] deriving (Show,Eq)
+data Program = Program Procedure [ProgramElement] deriving (Show,Eq)
 
-data Procedure = Proc TypeSignature Identifier [Identifier] Block deriving (Show,Eq)
+data ProgramElement = Ty Type | Pr Procedure | Fu Function deriving (Show,Eq)
+
+data Procedure = Proc MapType Identifier [Identifier] Block deriving (Show,Eq)
 
 data Block = Block (NonEmpty Statement) deriving (Show,Eq)
 
@@ -47,6 +49,10 @@ data SumType = SumType Identifier (NonEmpty TypeCons) deriving (Show,Eq)
 
 -- Product Type
 data TypeCons = TypeCons Identifier [Identifier] deriving (Show,Eq)
+
+data MapType = MapType BoundParameters TypeExpression deriving (Show,Eq)
+
+newtype BoundParameters = BoundParams [(Identifier, TypeExpression)] deriving (Show,Eq)
 
 data TypeSignature = TypeSig Identifier TypeExpression deriving (Show,Eq)
 
@@ -79,5 +85,5 @@ data SwitchExpression = SwitchExpr Expression (NonEmpty (Pattern, Expression)) E
 -- TODO
 data Pattern = Pat Literal deriving (Show,Eq)
 
-data LambdaExpression = ProcLambda (Maybe [Identifier]) Block
-                | FuncLambda (Maybe [Identifier]) Expression deriving (Show,Eq)
+data LambdaExpression = ProcLambda Identifier (NonEmpty Identifier) Block
+                | FuncLambda Identifier (NonEmpty Identifier) Expression deriving (Show,Eq)

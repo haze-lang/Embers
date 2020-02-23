@@ -19,7 +19,9 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 
 module Frontend.LexicalAnalysis.Token where
 
-data Whitespace = Space 
+import Data.List.NonEmpty
+
+data Whitespace = Space
                 | Tab
                 | Newline deriving (Show,Eq)
 
@@ -28,7 +30,8 @@ data Literal = NUMBER Int
             | STRING String
             | UNIT deriving (Show,Eq)
 
-newtype Identifier = IDENTIFIER String deriving (Show,Eq)
+data Identifier = IDENTIFIER String
+                | ResolvedName Int (NonEmpty String) deriving (Show,Eq)
 
 newtype ProcName = PROCEDURE String deriving (Show,Eq)
 newtype FuncName = FUNCTION String deriving (Show,Eq)
