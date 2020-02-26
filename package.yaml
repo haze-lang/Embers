@@ -26,7 +26,7 @@ dependencies:
 - QuickCheck # BSD-3-Clause
 - optparse-applicative # BSD-3-Clause
 - semigroups # BSD-3-Clause
-
+- pretty-simple # BSD-3-Clause
 library:
   source-dirs: src
 

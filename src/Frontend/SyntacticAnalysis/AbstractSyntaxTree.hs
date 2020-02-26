@@ -22,49 +22,53 @@ module Frontend.SyntacticAnalysis.AbstractSyntaxTree where
 import Frontend.LexicalAnalysis.Token
 import Data.List.NonEmpty
 
-data Program = Program Procedure [ProgramElement] deriving (Show,Eq)
+data Program = Program [ProgramElement] deriving (Show,Eq)
 
 data ProgramElement = Ty Type | Pr Procedure | Fu Function deriving (Show,Eq)
 
-data Procedure = Proc MapType Identifier [Identifier] Block deriving (Show,Eq)
+data Procedure = Proc MappingType Symbol Block deriving (Show,Eq)
 
 data Block = Block (NonEmpty Statement) deriving (Show,Eq)
 
 data Statement = StmtExpr Expression
                 | StmtAssign Assignment deriving (Show,Eq)
 
-data Assignment = Assignment Identifier Expression deriving (Show,Eq)
+data Assignment = Assignment Symbol Expression deriving (Show,Eq)
 
-data Function = Func TypeSignature Identifier [Identifier] Expression deriving (Show,Eq)
+data Function = Func MappingType Symbol Expression deriving (Show,Eq)
 
 data Type = TypeRec Record
         | TypeSumProd SumType
         deriving (Show,Eq)
 
-data Record = Record Identifier Identifier (NonEmpty RecordMember) deriving (Show,Eq)
+data Record = Record Symbol Symbol (NonEmpty RecordMember) deriving (Show,Eq)
 
-data RecordMember = RecordMember Identifier Identifier deriving (Show,Eq)
+data RecordMember = RecordMember Symbol Symbol deriving (Show,Eq)
 
-data SumType = SumType Identifier (NonEmpty TypeCons) deriving (Show,Eq)
+data SumType = SumType Symbol (NonEmpty DataCons) deriving (Show,Eq)
 
 -- Product Type
-data TypeCons = TypeCons Identifier [Identifier] deriving (Show,Eq)
+data DataCons = DataCons Symbol [Symbol] deriving (Show,Eq)
 
-data MapType = MapType BoundParameters TypeExpression deriving (Show,Eq)
+data MappingType = MappingType BoundParameters TypeExpression deriving (Show,Eq)
 
-newtype BoundParameters = BoundParams [(Identifier, TypeExpression)] deriving (Show,Eq)
+newtype BoundParameters = BoundParams [(Parameter, TypeExpression)] deriving (Show,Eq)
 
-data TypeSignature = TypeSig Identifier TypeExpression deriving (Show,Eq)
+data Parameter = Param Symbol CallMode deriving (Show, Eq)
+
+data CallMode = ByVal | ByRef deriving (Show, Eq)
+
+data TypeSignature = TypeSig Symbol TypeExpression deriving (Show,Eq)
 
 data TypeExpression = TMap TypeExpression TypeExpression
                     | TSet TypeExpression TypeExpression
-                    | TName Identifier deriving (Show,Eq)
+                    | TName Symbol deriving (Show,Eq)
 
 data Expression = ExprApp ApplicationExpression
                 | ExprSwitch SwitchExpression
                 | ExprCond ConditionalExpression
                 | ExprLambda LambdaExpression
-                | ExprIdent Identifier
+                | ExprIdent Symbol
                 | ExprLit Literal
                 deriving (Show,Eq)
 
@@ -75,15 +79,17 @@ data ApplicationExpression = App Expression (NonEmpty Expression) deriving (Show
 -- data PureExpression = ExprSwitch SwitchExpr
                 --     | ExprCond ConditionalExpression
                 --     | ExprLambda LambdaExpr
-                --     | ExprIdent Identifier
+                --     | ExprIdent Symbol
                 --     | ExprLit Literal deriving (Show,Eq)
 
 data ConditionalExpression = ConditionalExpr Expression Expression Expression deriving (Show,Eq)
 
 data SwitchExpression = SwitchExpr Expression (NonEmpty (Pattern, Expression)) Expression deriving (Show,Eq)
 
+data Symbol = Symb Identifier Metadata deriving (Show,Eq)
+
 -- TODO
 data Pattern = Pat Literal deriving (Show,Eq)
 
-data LambdaExpression = ProcLambda Identifier (NonEmpty Identifier) Block
-                | FuncLambda Identifier (NonEmpty Identifier) Expression deriving (Show,Eq)
+data LambdaExpression = ProcLambda Symbol (NonEmpty Parameter) Block
+                | FuncLambda Symbol (NonEmpty Parameter) Expression deriving (Show,Eq)

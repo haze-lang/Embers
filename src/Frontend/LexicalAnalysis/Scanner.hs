@@ -27,7 +27,7 @@ import qualified Data.Char
 
 -- |Scans the given string and returns list of tokens.
 scan :: String -> [Token]
-scan inp = scanInit $ (Str inp (Meta 0 0 ""))
+scan inp = scanInit $ (Str inp (Meta 1 1 ""))
 
 scanInit :: StrSource -> [Token]
 scanInit src = case src of 
@@ -132,7 +132,7 @@ stringLit = do
     m <- getMeta
     tryChar '"'
     do
-        x <- many alphanum
+        x <- many alphanumSpace
         tryChar '"'
         return (T (TkLit $ STRING x) m)
         <|> failToken "Mismatched \"." m
@@ -220,6 +220,9 @@ newline = tryChar '\r' <|> tryChar '\n'
 
 alphanum :: Lexer Char
 alphanum = sat Data.Char.isAlphaNum
+
+alphanumSpace :: Lexer Char
+alphanumSpace = alphanum <|> whitespace <|> horizontaltab
 
 tryString :: String -> Lexer String
 tryString [] = return ""

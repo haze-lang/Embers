@@ -20,9 +20,11 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 module Main where
 
 import System.IO
+import Frontend.StaticAnalysis.ProgramInitializer (initializeProgram)
 import Frontend.SyntacticAnalysis.Parser (parseTokens)
 import Frontend.LexicalAnalysis.Scanner (scan,isSpaceToken)
 import Options.Applicative
+import Text.Pretty.Simple (pPrint)
 import Args
 
 prompt :: String -> IO String
@@ -33,12 +35,14 @@ prompt text = do
 
 file path = do
     content <- readFile path
-    print (parseTokens $ filter (not.isSpaceToken) $ scan content)
+    pPrint (initializeProgram $ parseTokens $ ridTokensWhitespace $ scan content)
 
 repl = do
         input <- prompt "Embers>"
-        print (scan input)
+        print (initializeProgram $ parseTokens $ ridTokensWhitespace $ scan input)
         repl
+
+ridTokensWhitespace = filter (not.isSpaceToken)
 
 main :: IO ()
 main = do
