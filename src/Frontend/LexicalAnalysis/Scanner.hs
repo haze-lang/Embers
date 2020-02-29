@@ -26,38 +26,44 @@ import Control.Applicative
 import qualified Data.Char
 
 -- |Scans the given string and returns list of tokens.
-scan :: String -> [Token]
-scan inp = scanInit $ (Str inp (Meta 1 1 ""))
+scan :: String -> ([Token], [Error])
+scan inp = scanInit $ initState inp
 
-scanInit :: StrSource -> [Token]
+scanInit :: LexerState -> ([Token], [Error])
 scanInit src = case src of 
-    (Str []  _) -> []
+    ((Str []  _), e) -> ([], e)
     _ -> case parse (many wspace) src of
-        Left (ts, (Str [] _)) -> concat ts
-        Left (ts, rest) -> (concat ts) ++ (scanUtil rest)
+        Left (ts, ((Str [] _), e)) -> (ts, e)
+        Left (ts, rest) -> combineTokens ts (scanUtil rest)
         Right _ -> scanUtil src
 
-scanUtil :: StrSource -> [Token]
+combineTokens :: [Token] -> ([Token], [Error]) -> ([Token], [Error])
+combineTokens tokens (tokens2, err) = (tokens++tokens2, err)
+
+scanUtil :: LexerState -> ([Token], [Error])
 scanUtil xs = case parse symbolsLiterals xs of
-    Left (t, (Str [] _)) -> [t]
-    Left (t, rest) -> t : scanInit rest
+    Left (t, ((Str [] _), e)) -> ([t], e)
+    Left (t, rest) -> combineTokens [t] (scanInit rest)
 
     Right _ -> case parse ident xs of
-        Left (ident, (Str [] _)) -> case parse keywords xs of
-            Left (keyword, (Str [] _)) -> [keyword]
-            _ -> [ident]
+        Left (ident, ((Str [] _), err)) -> case parse keywords xs of
+            Left (keyword, ((Str [] _), err)) -> ([keyword], err)
+            _ -> ([ident], err)
         Left (ident, rest) -> case parse keywords xs of
-            Left (keyword, (Str [] _)) -> [keyword]
+            Left (keyword, ((Str [] _), err)) -> ([keyword], err)
             Left (keyword, rest2) -> if rest == rest2 
-                then keyword : scanInit rest2
-                else ident : scanInit rest
-            Right _ -> ident : scanInit rest
-        Right (Str _ m) -> (T (Invalid "") m) : scanInit (dropSource 1 xs) -- Error
+                then combineTokens [keyword] (scanInit rest2)
+                else combineTokens [ident] (scanInit rest)
+            Right _ -> combineTokens [ident] (scanInit rest)
+        Right ((Str _ m), err) -> combineTokens [(T (Invalid $ show err) m)] (scanInit (dropSourceError xs err)) -- Error
         where
-            dropSource :: Int -> StrSource -> StrSource
-            dropSource n src = case src of
-                (Str [] m) -> (Str [] m)
-                (Str xs m) -> (Str (drop n xs) (incCol m))
+            dropSourceError :: LexerState -> [Error] -> LexerState
+            dropSourceError src err = case src of
+                ((Str [] m), err2) -> (Str [] m, err2++err)
+                ((Str (x:xs) m), err2) -> (Str xs (incCol m), err++err2)
+
+initState :: String -> LexerState
+initState str = ((Str str (Meta 1 1 "")), [])
 
 keyword :: String -> TokenType -> Lexer Token
 keyword word t = do
@@ -65,7 +71,17 @@ keyword word t = do
     x <- tryString word
     return $ T t m
 
-wspace = some space <|> some tab <|> some line
+wspace = do
+    m <- getMeta
+    do 
+        some space
+        return $ T (WHITESPACE Space) m
+        <|> do
+        some tab
+        return $ T (WHITESPACE Tab) m 
+        <|> do
+        some line
+        return $ T (WHITESPACE Newline) m
 
 symbolsLiterals = literals <|> symbols
 
@@ -73,7 +89,9 @@ literals = numberLit <|> stringLit <|> charLit <|> unitLit
 
 keywords = _type <|> record <|> _if <|> _then <|> _else <|> switch <|> _default
 
-symbols =  bar <|> semicolon <|> bslash <|> cross <|> darrow <|> equals <|> colon <|> arrow <|> lparen <|> rparen <|> lbrace <|> rbrace
+symbols = keySymbols
+
+keySymbols =  bar <|> semicolon <|> bslash <|> cross <|> darrow <|> equals <|> colon <|> arrow <|> lparen <|> rparen <|> lbrace <|> rbrace
 
 _type = keyword "type" TYPE
 record = keyword "record" RECORD
@@ -105,6 +123,13 @@ ident = do
     x <- alpha
     xs <- many alphanum
     return (T (TkIdent $ IDENTIFIER (x:xs)) m)
+    <|> identSymbols
+
+identSymbols :: Lexer Token
+identSymbols = do
+    m <- getMeta
+    s <- some $ tryChar '=' <|> tryChar '`' <|> tryChar '!' <|> tryChar '@' <|> tryChar '$' <|> tryChar '%' <|> tryChar '^' <|> tryChar '&' <|> tryChar '*' <|> tryChar '-' <|> tryChar '+' <|> tryChar '.' <|> tryChar '<' <|> tryChar '>' <|> tryChar '?'
+    return (T (TkSymb $ IDENTIFIER s) m)
 
 numberLit :: Lexer Token
 numberLit = do
@@ -168,15 +193,18 @@ line = do
     nl <- newline
     return (T (WHITESPACE Newline) m)
 
-failToken mes m = return (T (Invalid mes) m)
+failToken :: String -> Metadata -> Lexer Token
+failToken message m = P $ \(src, err) -> Left (T (Invalid message) m, (src, (err ++ [formMessage message m])))
+    where formMessage str (Meta c l _) = "At line " ++ show l ++ ", cloumn " ++ show c ++ ": " ++ str
 
-type Lexer a = AbsParser StrSource a
+type Error = (String)
+type LexerState = (StrSource, [Error])
+type Lexer a = AbsParser LexerState a
 
 -- State Manipulation
 
 getMeta :: Lexer Metadata
-getMeta = P $ \src -> case src of
-    (Str str m) -> Left (m, src)
+getMeta = P $ \(Str str m, err) -> Left (m, (Str str m, err))
 
 isSpaceToken t = case t of
     T (WHITESPACE Space) _ -> True
@@ -184,13 +212,13 @@ isSpaceToken t = case t of
 
 item :: Lexer Char
 item = P $ \inp -> case inp of
-    (Str [] m) -> Right inp
-    (Str (x:xs) m) -> case x of
+    ((Str [] m), err) -> Right inp
+    ((Str (x:xs) m), err) -> case x of
         '\r' -> case xs of
-            ('\n':bs) -> Left (x, (Str bs (incLine m)))
-            _ -> Left ((x, (Str xs (incLine m))))
-        '\n' -> Left (x, (Str xs (incLine m)))
-        _ -> Left (x, (Str xs (incCol m)))
+            ('\n':bs) -> Left (x, (Str bs (incLine m), err))
+            _ -> Left ((x, (Str xs (incLine m), err)))
+        '\n' -> Left (x, (Str xs (incLine m), err))
+        _ -> Left (x, (Str xs (incCol m), err))
 
 -- Helpers
 

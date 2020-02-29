@@ -31,7 +31,7 @@ import qualified Frontend.SyntacticAnalysis.Parser as P
 
 i = debugInitializer "Main : Unit -> Unit\nMain a\n{\nx = b => b 1\n}"
 
-debugInitializer inp = case P.debugParser P.program inp of
+debugInitializer inp = case P.debugParserTable P.program inp of
     Left (p, ([], _, _, t, err)) -> initializeProgram (p, t)
 
 -- initializeProgram :: (Program, Table) -> (Program, Table)
@@ -60,6 +60,7 @@ programElement = do
         Pr p -> procedure p
         Fu f -> function f
         Ty t -> _type t
+        Ex e -> expr e
 
 procedure :: Procedure -> Initializer ProgramElement
 procedure (Proc procType name body) = do
@@ -100,6 +101,12 @@ _type (TypeSumProd (SumType name cons)) = do
                     x <- resolveName x
                     resolveNames xs (aux++[x])
 
+expr :: ExpressionVariable -> Initializer ProgramElement
+expr (ExpressionVar t name e) = do
+    t <- typeExpression t
+    e <- expression e
+    return $ Ex $ ExpressionVar t name e
+
 block :: Block -> Initializer Block
 block (Block stmts) = do
     stmts <- statements (toList stmts) []
@@ -130,6 +137,16 @@ expression (ExprLit lit) = return $ ExprLit lit
 expression (ExprIdent id) = do
     id <- resolveName id
     return $ ExprIdent id
+expression (ExprTuple (Tuple (e:|es))) = do
+    e <- expression e
+    es <- expressions es []
+    return $ ExprTuple $ Tuple (e:|es)
+    where
+        expressions [] aux = return aux
+        expressions (e:es) aux = do
+            e <- expression e
+            expressions es (aux++[e])
+
 expression (ExprCond (ConditionalExpr flag e1 e2)) = do
     flag <- expression flag
     e1 <- expression e1
@@ -159,17 +176,12 @@ expression (ExprLambda (FuncLambda name params body)) = do
     body <- expression body
     popScope
     return $ ExprLambda (FuncLambda name params body)
-expression (ExprApp (App l args)) = do
+expression (ExprApp (App l arg)) = do
     l <- case l of
         ExprIdent _ -> callee l
         _ -> expression l
-    args <- expressions (toList args) []
-    return $ ExprApp (App l (fromList args))
-    where
-        expressions [] aux = return aux
-        expressions (e:es) aux = do
-            e <- expression e
-            expressions es (aux++[e])
+    arg <- expression arg
+    return $ ExprApp (App l arg)
 
 callee :: Expression -> Initializer Expression
 callee (ExprIdent name) = do

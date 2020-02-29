@@ -39,8 +39,8 @@ newtype ParamName = PARAM String deriving (Show,Eq)
 newtype TypeName = TYPENAME String deriving (Show,Eq)
 
 data TokenType = TYPE | RECORD | IF | THEN | ELSE | SWITCH | DEFAULT    -- Keywords
-            | BAR | EQUALS | COLON | ARROW | LPAREN | RPAREN | LBRACE | RBRACE | DARROW | BSLASH | CROSS | SEMICOLON   -- Symbols
-            | TkProc ProcName | TkFunc FuncName | TkParam ParamName | TkType TypeName | TkIdent Identifier -- Identifiers
+            | BAR | EQUALS | COLON | COMMA | ARROW | LPAREN | RPAREN | LBRACE | RBRACE | DARROW | BSLASH | CROSS | SEMICOLON   -- Symbols
+            | TkIdent Identifier | TkSymb Identifier -- Identifiers
             | TkLit Literal                             -- Literals
             | WHITESPACE Whitespace                     -- Space/Newline
             | COMMENT

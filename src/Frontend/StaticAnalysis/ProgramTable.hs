@@ -29,7 +29,7 @@ import Frontend.LexicalAnalysis.Token
 
 type Table = (NextID, SymTable)
 type NextID = ID
-type SymTable = M.Map NextID TableEntry
+type SymTable = M.Map ID TableEntry
 type ID = Int
 
 data Scope = Scope ID
@@ -63,8 +63,6 @@ insertChar = insertTypeEntry (getSymb "Char") [] False
 
 insertString = insertTypeEntry (getSymb "String") [] False
 insertInt = insertTypeEntry (getSymb "Int") [] False
-    -- consId <- insertFuncEntry "Unit_C" (TName $ ResolvedName typeId ("Global":|[])) (BoundParams [])
-    -- updateTableEntry' typeId (EntryType "Unit" (getAbs "Unit") Global (Def (True, SType [consId], Nothing)))
 
 insertTypeEntry name constructors sameNameCons = insertTableEntry' $ EntryType name (getAbs name) Global (Def (sameNameCons, SType []))
 

@@ -24,7 +24,9 @@ import Data.List.NonEmpty
 
 data Program = Program [ProgramElement] deriving (Show,Eq)
 
-data ProgramElement = Ty Type | Pr Procedure | Fu Function deriving (Show,Eq)
+data ProgramElement = Ty Type | Pr Procedure | Fu Function | Ex ExpressionVariable deriving (Show,Eq)
+
+data ExpressionVariable = ExpressionVar TypeExpression Symbol Expression deriving (Show,Eq)
 
 data Procedure = Proc MappingType Symbol Block deriving (Show,Eq)
 
@@ -64,32 +66,32 @@ data TypeExpression = TMap TypeExpression TypeExpression
                     | TSet TypeExpression TypeExpression
                     | TName Symbol deriving (Show,Eq)
 
+data Sig = SigArrow (NonEmpty Sig)
+        | SigProd (NonEmpty Sig)
+        | SigSymb Symbol
+        deriving (Show,Eq)
+
 data Expression = ExprApp ApplicationExpression
                 | ExprSwitch SwitchExpression
                 | ExprCond ConditionalExpression
                 | ExprLambda LambdaExpression
+                | ExprTuple Tuple
                 | ExprIdent Symbol
                 | ExprLit Literal
                 deriving (Show,Eq)
 
-data ApplicationExpression = App Expression (NonEmpty Expression) deriving (Show,Eq)
-
--- data GroupedExpression = GroupedExpression Expression deriving (Show,Eq)
-
--- data PureExpression = ExprSwitch SwitchExpr
-                --     | ExprCond ConditionalExpression
-                --     | ExprLambda LambdaExpr
-                --     | ExprIdent Symbol
-                --     | ExprLit Literal deriving (Show,Eq)
+data ApplicationExpression = App Expression Expression deriving (Show,Eq)
 
 data ConditionalExpression = ConditionalExpr Expression Expression Expression deriving (Show,Eq)
 
 data SwitchExpression = SwitchExpr Expression (NonEmpty (Pattern, Expression)) Expression deriving (Show,Eq)
 
+data Tuple = Tuple (NonEmpty Expression) deriving (Show,Eq)
+
 data Symbol = Symb Identifier Metadata deriving (Show,Eq)
 
 -- TODO
-data Pattern = Pat Literal deriving (Show,Eq)
+data Pattern = Pat Expression deriving (Show,Eq)
 
 data LambdaExpression = ProcLambda Symbol (NonEmpty Parameter) Block
                 | FuncLambda Symbol (NonEmpty Parameter) Expression deriving (Show,Eq)

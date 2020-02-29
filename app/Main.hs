@@ -35,12 +35,21 @@ prompt text = do
 
 file path = do
     content <- readFile path
-    pPrint (initializeProgram $ parseTokens $ ridTokensWhitespace $ scan content)
+    case scan content of
+        (tokens, []) -> pPrint (initializeProgram $ parseTokens $ ridTokensWhitespace tokens)
+        (_, err) -> lexicalErrors err
 
 repl = do
         input <- prompt "Embers>"
-        print (initializeProgram $ parseTokens $ ridTokensWhitespace $ scan input)
+        case scan input of
+            (tokens, []) -> pPrint (initializeProgram $ parseTokens $ ridTokensWhitespace tokens)
+            (tokens, err) -> lexicalErrors err
         repl
+
+lexicalErrors :: [String] -> IO ()
+lexicalErrors errors = do
+    print "Lexical Errors found."
+    pPrint errors
 
 ridTokensWhitespace = filter (not.isSpaceToken)
 
