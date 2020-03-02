@@ -18,6 +18,10 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
 module Frontend.LexicalAnalysis.Scanner
+(
+    scan,
+    isSpaceToken
+)
 where
 
 import Frontend.AbstractParser
@@ -89,9 +93,9 @@ literals = numberLit <|> stringLit <|> charLit <|> unitLit
 
 keywords = _type <|> record <|> _if <|> _then <|> _else <|> switch <|> _default
 
-symbols = keySymbols
+symbols = keywordSymbols
 
-keySymbols =  bar <|> semicolon <|> bslash <|> cross <|> darrow <|> equals <|> colon <|> arrow <|> lparen <|> rparen <|> lbrace <|> rbrace
+keywordSymbols = bar <|> semicolon <|> bslash <|> cross <|> comma <|> darrow <|> equals <|> colon <|> arrow <|> lparen <|> rparen <|> lbrace <|> rbrace
 
 _type = keyword "type" TYPE
 record = keyword "record" RECORD
@@ -102,6 +106,7 @@ switch = keyword "switch" SWITCH
 _default = keyword "default" DEFAULT
 bar = keyword "|" BAR
 cross = keyword "X" CROSS
+comma = keyword "," COMMA
 equals = keyword "=" EQUALS
 colon = keyword ":" COLON
 arrow = keyword "->" ARROW

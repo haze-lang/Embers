@@ -50,13 +50,13 @@ stdLib = do
 
 insertUnit = do
     typeId <- insertTypeEntry (getSymb "Unit") [] True
-    consId <- insertFuncEntry (getSymb "Unit_C") (TName $ getResolvedSymb typeId "Unit_C") (BoundParams [])
+    consId <- insertValConsEntry (getSymb "Unit_C") (typeId, [])
     updateTableEntry' typeId (EntryType (getSymb "Unit") (getAbs $ getSymb "Unit") Global (Def (True, SType [consId])))
 
 insertBool = do
     typeId <- insertTypeEntry (getSymb "Bool") [] False
-    consId1 <- insertFuncEntry (getSymb "False") (TName $ getResolvedSymb typeId "False") (BoundParams [])
-    consId2 <- insertFuncEntry (getSymb "True") (TName $ getResolvedSymb typeId "True") (BoundParams [])
+    consId1 <- insertValConsEntry (getSymb "True") (typeId, [])
+    consId2 <- insertValConsEntry (getSymb "False") (typeId, [])
     updateTableEntry' typeId (EntryType (getSymb "Bool") (getAbs $ getSymb "Bool") Global (Def (False, SType [consId1, consId2])))
 
 insertChar = insertTypeEntry (getSymb "Char") [] False
@@ -66,10 +66,12 @@ insertInt = insertTypeEntry (getSymb "Int") [] False
 
 insertTypeEntry name constructors sameNameCons = insertTableEntry' $ EntryType name (getAbs name) Global (Def (sameNameCons, SType []))
 
-insertFuncEntry name retType boundParams = insertTableEntry' $ EntryFunc name (getAbs name) Global (Def (retType, boundParams))
+insertVarEntry name varType = insertTableEntry' $ EntryVar name (getAbs name) Global (Def varType)
+
+insertValConsEntry name varType = insertTableEntry' $ EntryValCons name (getAbs name) Global (Def varType)
 
 getAbs (Symb (IDENTIFIER n) _) = n :| ["Global"]
-getAbs (Symb (ResolvedName _ n) _) = n
+-- getAbs (Symb (ResolvedName _ n) _) = n
 
 getSymb name = Symb (IDENTIFIER name) (Meta 0 0 "StandardLibrary.hz")
 
@@ -111,25 +113,29 @@ lookupTableEntry = M.lookup
 
 -- Misc
 
-type AbsoluteName = NonEmpty Name
-type Name = String
+type AbsoluteName = NonEmpty String -- Only used for lookup when symbols have not been resolved.
+type Name = Symbol
 type ReturnType = TypeExpression
 type Param = Identifier
 type VarType = TypeExpression
-type DCons = ID
+type VCons = ID
 type FieldVar = ID
 type FieldType = ID
 type SameNameCons = Bool
+type TypeId = ID
+type ParamId = ID
 
-data TableEntry = EntryProc Symbol AbsoluteName Scope (Definition (ReturnType, BoundParameters))
-                | EntryFunc Symbol AbsoluteName Scope (Definition (ReturnType, BoundParameters))
-                | EntryVar Symbol AbsoluteName Scope VarType         -- Name, Type (ID), Parent Scope (ID)
-                | EntryType Symbol AbsoluteName Scope (Definition (SameNameCons, TypeDef))           -- Name, Parent Scope (ID)
+data TableEntry = EntryProc Name AbsoluteName Scope (Definition [ParamId])
+                | EntryFunc Name AbsoluteName Scope (Definition [ParamId])
+                | EntryValCons Name AbsoluteName Scope (Definition (TypeId, [ParamId]))
+                | EntryVar Name AbsoluteName Scope (Definition VarType)
+                | EntryType Name AbsoluteName Scope (Definition (SameNameCons, TypeDef))
+                | EntryTypeCons Name AbsoluteName Scope (Definition (SameNameCons, TypeDef))  -- Parametric Types
                 deriving (Show,Eq)
 
 data Definition a = Def a
                 | Undefined deriving (Show,Eq)
 
-data TypeDef = RecType DCons [FieldVar] [FieldType]    -- Data Constructor (ID), Field Names (IDs), Field Types (IDs)
-                | SType [DCons]             -- Data Constructors (IDs)
+data TypeDef = RecType VCons [(FieldVar, FieldType)]
+                | SType [VCons]
                  deriving (Show,Eq)

@@ -43,14 +43,14 @@ data Type = TypeRec Record
         | TypeSumProd SumType
         deriving (Show,Eq)
 
-data Record = Record Symbol Symbol (NonEmpty RecordMember) deriving (Show,Eq)
+data Record = Record Symbol Symbol (NonEmpty RecordMember) deriving (Show,Eq)           -- Members' types must be a type name, not a type expression.
 
 data RecordMember = RecordMember Symbol Symbol deriving (Show,Eq)
 
-data SumType = SumType Symbol (NonEmpty DataCons) deriving (Show,Eq)
+data SumType = SumType Symbol (NonEmpty ValueCons) deriving (Show,Eq)
 
 -- Product Type
-data DataCons = DataCons Symbol [Symbol] deriving (Show,Eq)
+data ValueCons = ValCons Symbol [Symbol] deriving (Show,Eq)
 
 data MappingType = MappingType BoundParameters TypeExpression deriving (Show,Eq)
 
@@ -62,20 +62,16 @@ data CallMode = ByVal | ByRef deriving (Show, Eq)
 
 data TypeSignature = TypeSig Symbol TypeExpression deriving (Show,Eq)
 
-data TypeExpression = TMap TypeExpression TypeExpression
-                    | TSet TypeExpression TypeExpression
-                    | TName Symbol deriving (Show,Eq)
-
-data Sig = SigArrow (NonEmpty Sig)
-        | SigProd (NonEmpty Sig)
-        | SigSymb Symbol
+data TypeExpression = TArrow TypeExpression TypeExpression
+        | TProd (NonEmpty TypeExpression)
+        | TSymb Symbol
         deriving (Show,Eq)
 
 data Expression = ExprApp ApplicationExpression
                 | ExprSwitch SwitchExpression
                 | ExprCond ConditionalExpression
                 | ExprLambda LambdaExpression
-                | ExprTuple Tuple
+                | ExprTuple TupleExpression
                 | ExprIdent Symbol
                 | ExprLit Literal
                 deriving (Show,Eq)
@@ -86,7 +82,7 @@ data ConditionalExpression = ConditionalExpr Expression Expression Expression de
 
 data SwitchExpression = SwitchExpr Expression (NonEmpty (Pattern, Expression)) Expression deriving (Show,Eq)
 
-data Tuple = Tuple (NonEmpty Expression) deriving (Show,Eq)
+data TupleExpression = Tuple (NonEmpty Expression) deriving (Show,Eq)
 
 data Symbol = Symb Identifier Metadata deriving (Show,Eq)
 
