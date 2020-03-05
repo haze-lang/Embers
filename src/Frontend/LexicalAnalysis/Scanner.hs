@@ -89,13 +89,34 @@ wspace = do
 
 symbolsLiterals = literals <|> symbols
 
-literals = numberLit <|> stringLit <|> charLit <|> unitLit
+literals = numberLit
+    <|> stringLit
+    <|> charLit
+    <|> unitLit
 
-keywords = _type <|> record <|> _if <|> _then <|> _else <|> switch <|> _default
+keywords = _type
+    <|> record
+    <|> _if
+    <|> _then
+    <|> _else
+    <|> switch
+    <|> _default
 
 symbols = keywordSymbols
 
-keywordSymbols = bar <|> semicolon <|> bslash <|> cross <|> comma <|> darrow <|> equals <|> colon <|> arrow <|> lparen <|> rparen <|> lbrace <|> rbrace
+keywordSymbols = bar
+    <|> semicolon
+    <|> bslash
+    <|> cross
+    <|> comma
+    <|> darrow
+    <|> equals
+    <|> colon
+    <|> arrow
+    <|> lparen
+    <|> rparen
+    <|> lbrace
+    <|> rbrace
 
 _type = keyword "type" TYPE
 record = keyword "record" RECORD
@@ -117,11 +138,6 @@ rparen = keyword ")" RPAREN
 lbrace = keyword "{" LBRACE
 rbrace = keyword "}" RBRACE
 
-func = ident
-param = ident
-typeName = ident
-memberName = ident
-
 ident :: Lexer Token
 ident = do
     m <- getMeta
@@ -133,19 +149,33 @@ ident = do
 identSymbols :: Lexer Token
 identSymbols = do
     m <- getMeta
-    s <- some $ tryChar '=' <|> tryChar '`' <|> tryChar '!' <|> tryChar '@' <|> tryChar '$' <|> tryChar '%' <|> tryChar '^' <|> tryChar '&' <|> tryChar '*' <|> tryChar '-' <|> tryChar '+' <|> tryChar '.' <|> tryChar '<' <|> tryChar '>' <|> tryChar '?'
+    s <- some $ tryChar '='
+        <|> tryChar '`'
+        <|> tryChar '!'
+        <|> tryChar '@'
+        <|> tryChar '$'
+        <|> tryChar '%'
+        <|> tryChar '^'
+        <|> tryChar '&'
+        <|> tryChar '*'
+        <|> tryChar '-'
+        <|> tryChar '+'
+        <|> tryChar '.'
+        <|> tryChar '<'
+        <|> tryChar '>'
+        <|> tryChar '?'
     return (T (TkSymb $ IDENTIFIER s) m)
 
 numberLit :: Lexer Token
 numberLit = do
-        m <- getMeta
-        tryChar '-'
-        n <- some digit
-        return (T (TkLit $ NUMBER (-(read n))) m)
-        <|> do
-            m <- getMeta
-            n <- some digit
-            return (T (TkLit $ NUMBER (read n)) m)
+    m <- getMeta
+    tryChar '-'
+    n <- some digit
+    return (T (TkLit $ NUMBER (-(read n))) m)
+    <|> do
+    m <- getMeta
+    n <- some digit
+    return (T (TkLit $ NUMBER (read n)) m)
 
 charLit :: Lexer Token
 charLit = do
@@ -202,7 +232,7 @@ failToken :: String -> Metadata -> Lexer Token
 failToken message m = P $ \(src, err) -> Left (T (Invalid message) m, (src, (err ++ [formMessage message m])))
     where formMessage str (Meta c l _) = "At line " ++ show l ++ ", cloumn " ++ show c ++ ": " ++ str
 
-type Error = (String)
+type Error = String
 type LexerState = (StrSource, [Error])
 type Lexer a = AbsParser LexerState a
 
@@ -226,8 +256,6 @@ item = P $ \inp -> case inp of
         _ -> Left (x, (Str xs (incCol m), err))
 
 -- Helpers
-
-data StrSource = Str String Metadata deriving Show
 
 instance Eq StrSource where
     (==) (Str x m1) (Str y m2) = x == y && m1 == m2

@@ -28,9 +28,10 @@ import Frontend.StaticAnalysis.ProgramTable (
     updateTableEntry, insertTableEntry, lookupTableEntry, initializeTable)
 import Frontend.AbstractParser
 import Control.Applicative
+import Data.Char (isUpper, isLower)
 import Control.Monad (when)
 import Data.List.NonEmpty (NonEmpty((:|)), (<|), fromList, toList, reverse)
-import Data.Either
+import Data.Either (Either(Left, Right))
 import qualified Data.Map.Strict as M
 import Frontend.LexicalAnalysis.Token
 import qualified Frontend.LexicalAnalysis.Scanner
@@ -59,37 +60,33 @@ typeVarDef = do
     return $ Ty t
 
 valueVarDef :: Parser ProgramElement
-valueVarDef = arrowInstance
+valueVarDef = do
+    many wspace
+    exprDef <|> arrowInstance
 
 -- TODO
 exprDef :: Parser ProgramElement
 exprDef = do
     ts <- typeSig $ ExprVal Nothing  -- Pushes Scope
     let (TypeSig nameTypeSig exprType) = ts
-    name <- ident
+    token (WHITESPACE Newline)
+    name <- funcIdent
     validateNames name nameTypeSig
     name <- resolveName name
     token EQUALS
     e <- expression
     endScope
-    return $ Ex $ ExpressionVar exprType name e
+    return $ ExpressionVar exprType name e
 
 arrowInstance :: Parser ProgramElement
-arrowInstance = do
-    many wspace
-    p <- procedure
-    return $ Pr p
-    <|> do
-    many wspace
-    f <- function
-    return $ Fu f
+arrowInstance = procedure <|> function
 
-procedure :: Parser Procedure
+procedure :: Parser ProgramElement
 procedure = do
     ts <- typeSig Procedure  -- Pushes Scope
     let (TypeSig nameTypeSig procType) = ts
     token $ WHITESPACE Newline
-    name <- ident
+    name <- procIdent
     validateNames name nameTypeSig
     name <- resolveName name
     params <- formalParam
@@ -99,45 +96,43 @@ procedure = do
     token (WHITESPACE Newline)
     body <- block
     endScope
-    return (Proc (MappingType boundParams returnType) name body)
+    return $ Proc (MappingType boundParams returnType) name body
 
 block :: Parser Block
 block = do
     token LBRACE
     many wspace
-    xs <- some (do
-        s <- statement
-        terminator
-        return s)
+    xs <- some terminatedStatement
     many wspace
     token RBRACE
-    case xs of
-        (y:ys) -> return (Block (y :| ys))
-        _ -> empty
+    return $ Block (fromList xs)
+    
+    where
+    terminatedStatement = do
+        s <- statement
+        terminator
+        return s
 
 statement :: Parser Statement
-statement = do
-    a <- assignment
-    return (StmtAssign a)
+statement = assignment
     <|> do
     e <- expression
     return (StmtExpr e)
 
-assignment :: Parser Assignment
+assignment :: Parser Statement
 assignment = do
     x <- ident
-    x <- resolveName x <|> defineName x (ExprVal Nothing)     -- First assignment to undefined is definition.
-    many wspace
+    x <- resolveName x <|> defineName x (ExprVal Nothing)     -- First assignment to unbound is definition.
     token EQUALS
     value <- expression
-    return (Assignment x value)
+    return $ Assignment x value
 
-function :: Parser Function
+function :: Parser ProgramElement
 function = do
     ts <- typeSig Function  -- Pushes Scope
     let (TypeSig nameTypeSig funcType) = ts
-    token (WHITESPACE Newline)
-    name <- ident
+    token $ WHITESPACE Newline
+    name <- funcIdent
     validateNames name nameTypeSig
     name <- resolveName name
     params <- formalParam
@@ -147,7 +142,7 @@ function = do
     token EQUALS
     body <- expression
     endScope
-    return (Func (MappingType boundParams returnType) name body)
+    return $ Func (MappingType boundParams returnType) name body
 
 formalParam :: Parser (NonEmpty Parameter)
 formalParam = do
@@ -190,42 +185,41 @@ sigName = do
     token RPAREN
     return a
 
-bindParams (TArrow (TProd ls) r) params = do
-    params <- bParams ls params
-    return $ (BoundParams params, r)
+bindParams (TArrow (TProd exprList) retType) params = do
+    params <- bParams exprList params
+    return $ (BoundParams params, retType)
+    
     where
-        bParams :: NonEmpty TypeExpression -> NonEmpty Parameter -> Parser [(Parameter, TypeExpression)]
-        bParams (t:|[]) (p:|[]) = return [(p, t)]
-        bParams (t:|ts) (p:|ps) = case t of
-            TArrow _ _ -> if length ts == 0 && length ps == 0
-                then return [(p, t)]
-                else error ""
-            TSymb s -> handleProd (Data.List.NonEmpty.reverse (t:|ts)) (Data.List.NonEmpty.reverse (p:|ps)) []
-            TProd prods -> if length ps == 0
-                then handleProd (Data.List.NonEmpty.reverse prods) (Data.List.NonEmpty.reverse (p:|ps)) []
-                else error "Arrow Operator is binary and maps exactly one parameter."
-            where
-                handleProd :: NonEmpty TypeExpression -> NonEmpty Parameter -> [(Parameter, TypeExpression)] -> Parser [(Parameter, TypeExpression)]
-                handleProd t (p:|[]) aux = return $ case t of
-                   t:|[] -> (p, t):aux
-                   _ -> (p, TProd $ Data.List.NonEmpty.reverse t):aux
-                handleProd (t:|[]) (p:|ps) aux = error "Arrow Operator is binary and maps exactly one parameter."
-                handleProd (t:|ts) (p:|ps) aux = handleProd (fromList ts) (fromList ps) ((p, t):aux)
+    bParams :: NonEmpty TypeExpression -> NonEmpty Parameter -> Parser [(Parameter, TypeExpression)]
+    bParams (t:|[]) (p:|[]) = return [(p, t)]
+    bParams (t:|ts) (p:|ps) = case t of
+        TArrow _ _ ->
+            if length ts == 0 && length ps == 0
+            then return [(p, t)]
+            else error ""
+        TSymb s -> handleProd (Data.List.NonEmpty.reverse (t:|ts)) (Data.List.NonEmpty.reverse (p:|ps)) []
+        TProd prods ->
+            if length ps == 0
+            then handleProd (Data.List.NonEmpty.reverse prods) (Data.List.NonEmpty.reverse (p:|ps)) []
+            else error "Arrow Operator is binary and maps exactly one parameter."
+        
+        where
+        handleProd :: NonEmpty TypeExpression -> NonEmpty Parameter -> [(Parameter, TypeExpression)] -> Parser [(Parameter, TypeExpression)]
+        handleProd t (p:|[]) aux = return $ case t of
+            t:|[] -> (p, t):aux
+            _ -> (p, TProd $ Data.List.NonEmpty.reverse t):aux
+        handleProd (t:|[]) (p:|ps) aux = error "Arrow Operator is binary and maps exactly one parameter."
+        handleProd (t:|ts) (p:|ps) aux = handleProd (fromList ts) (fromList ps) ((p, t):aux)
 
 -- Types
 
 _type :: Parser Type
-_type = do
-    s <- sumType
-    return $ TypeSumProd s
-    <|> do
-    r <- recordType
-    return $ TypeRec r
+_type = sumType <|> recordType
 
-sumType :: Parser SumType
+sumType :: Parser Type
 sumType = do
     token TYPE
-    name <- ident
+    name <- typeIdent
     name <- defineName name Type
     token EQUALS
     cons <- productType name
@@ -236,44 +230,49 @@ sumType = do
 
 productType :: Symbol -> Parser ValueCons
 productType typeName = do
-    cons <- ident
+    cons <- consIdent
     cons <- handleSameCons cons typeName
     cons <- defineName cons Constructor
-    operands <- (do
-        operand <- ident
-        operandList <- many (do
-            token CROSS
-            op <- ident
-            return op)
-        return (operand:operandList))
+    operands <- consOperands
     return $ ValCons cons operands
     <|> do
-    cons <- ident
+    cons <- consIdent
     cons <- handleSameCons cons typeName
     let (Symb (ResolvedName typeId _) _) = typeName
     cons <- defineName cons (NullConstructor typeId)
     return $ ValCons cons []
 
-recordType :: Parser Record
+    where
+    consOperands = do
+        operand <- typeIdent -- 
+        operandList <- many restOperands
+        return $ operand:operandList
+        
+        where restOperands = token CROSS >>= const typeIdent
+
+recordType :: Parser Type
 recordType = do
     token RECORD
     typeName <- ident
-    typeName <- beginScope typeName Type
     token EQUALS
     cons <- ident
     cons <- handleSameCons cons typeName
     cons <- defineName cons Constructor
+    typeName <- beginScope typeName Type    -- Start scope after cons has been defined so that cons is global.
     token $ WHITESPACE Newline
-    members <- some (do
+    members <- some members
+    let (x:xs) = members
+    endScope
+    return $ Record typeName cons (x :| xs)
+
+    where
+    members = do
         member <- ident
         token COLON
         memberType <- ident
         terminator
         member <- defineName member (ExprVal $ Just $ TSymb memberType)
-        return $ RecordMember member memberType)
-    let (x:xs) = members
-    endScope
-    return $ Record typeName cons (x :| xs)
+        return $ (member, memberType)
 
 -- Expressions
 
@@ -292,34 +291,22 @@ infixApp = do
         lAssociate e [] = e
         lAssociate first xs = f' first $ Prelude.reverse xs
             where
-                f' last ((op, arg):[]) = ExprApp $ App (ExprIdent op) (ExprTuple $ Tuple (last :| [arg]))
-                f' last ((op, arg):xs) = ExprApp $ App (ExprIdent op) (ExprTuple $ Tuple (f' last xs :| [arg]))
+                f' last ((op, arg):[]) = App (Ident op) (Tuple (last :| [arg]))
+                f' last ((op, arg):xs) = App (Ident op) (Tuple (f' last xs :| [arg]))
 
-expr = do
-    se <- switchExpr
-    return (ExprSwitch se)
-    <|> do
-    ce <- conditionalExpr
-    return (ExprCond ce)
-    <|> do
-    le <- lambdaExpr
-    return (ExprLambda le)
-    <|> do
-    t <- tuple
-    return $ ExprTuple t
-    <|> do
-    id <- ident
-    return (ExprIdent id)
-    <|> do
-    lit <- literal
-    return $ ExprLit lit
+expr = switchExpr
+    <|> conditionalExpr
+    <|> lambdaExpr
+    <|> tuple
+    <|> identifier
+    <|> literal
     <|> groupedExpression
 
 application :: Parser Expression
 application = do
     callee <- expr
     arg <- expr
-    return (ExprApp $ App callee arg)
+    return $ App callee arg
 
 groupedExpression :: Parser Expression
 groupedExpression = do
@@ -328,7 +315,7 @@ groupedExpression = do
     token RPAREN
     return e
 
-conditionalExpr :: Parser ConditionalExpression
+conditionalExpr :: Parser Expression
 conditionalExpr = do
     many wspace
     token IF
@@ -339,9 +326,9 @@ conditionalExpr = do
     many wspace
     token ELSE
     e3 <- expression
-    return $ ConditionalExpr e1 e2 e3
+    return $ Conditional e1 e2 e3
 
-switchExpr :: Parser SwitchExpression
+switchExpr :: Parser Expression
 switchExpr = do
     token SWITCH
     switch <- expression
@@ -351,10 +338,10 @@ switchExpr = do
     token ARROW
     def <- expression
     case cases of
-        (x:xs) -> return (SwitchExpr (switch) (x :| xs) def)
+        (x:xs) -> return (Switch (switch) (x :| xs) def)
         [] -> empty
     where
-        _case :: Parser (Pattern, Expression)
+        _case :: Parser (Expression, Expression)
         _case = do
             p <- pattern
             token ARROW
@@ -362,7 +349,7 @@ switchExpr = do
             terminator
             return (p, e)
 
-lambdaExpr :: Parser LambdaExpression
+lambdaExpr :: Parser Expression
 lambdaExpr = procLambdaExpr <|> funcLambdaExpr
     where
     procLambdaExpr = do
@@ -373,7 +360,7 @@ lambdaExpr = procLambdaExpr <|> funcLambdaExpr
         params <- return params
         do  b <- block
             endScope
-            return (ProcLambda name (fromList params) b)
+            return (Lambda $ ProcLambda name (fromList params) b)
 
     funcLambdaExpr = do
         name <- pushScopeLambda Function
@@ -382,14 +369,14 @@ lambdaExpr = procLambdaExpr <|> funcLambdaExpr
         token DARROW
         do  e <- application <|> expression
             endScope
-            return (FuncLambda name (fromList params) e)
+            return (Lambda $ FuncLambda name (fromList params) e)
 
     defineLambdaParams [] aux = return aux
     defineLambdaParams ((Param name c):ps) aux = do
         name <- defineName name (ExprVal Nothing)
         defineLambdaParams ps (aux++[(Param name c)])
 
-tuple :: Parser TupleExpression
+tuple :: Parser Expression
 tuple = do
     token LPAREN
     e <- expression
@@ -399,13 +386,14 @@ tuple = do
     token RPAREN
     return $ Tuple (e :| es)
 
-pattern :: Parser Pattern
-pattern = do
-    lit <- literal
-    return (Pat $ ExprLit lit)
-    <|> do
-    t <- tuple
-    return (Pat $ ExprTuple t)
+identifier :: Parser Expression
+identifier = do
+    name <- ident
+    return $ Ident name
+
+pattern :: Parser Expression
+pattern = literal
+        <|> tuple
 
 -- State
 
@@ -428,10 +416,13 @@ item = P $ \(inp, name, lambdaNo, t, err) -> case inp of
 -- Parser Helpers
 
 validateNames :: Symbol -> Symbol -> Parser ()
-validateNames name nameTypeSig = when (toStr name /= toStr nameTypeSig) $ addError $ "Type Signature and Definition have mismatching names: " ++ (toStr name)
+validateNames name nameTypeSig = 
+    when (toStr name /= toStr nameTypeSig) $
+        addError $ "Type Signature and Definition have mismatching names: " ++ (toStr name)
 
 -- | If Data Constructor has same name as Type, add _C suffix to constructor.
-handleSameCons (Symb (IDENTIFIER cons) m) typeName = if cons == toStr typeName
+handleSameCons (Symb (IDENTIFIER cons) m) typeName =
+    if cons == toStr typeName
     then return $ Symb (IDENTIFIER (cons ++ "_C")) m
     else return $ Symb (IDENTIFIER cons) m
 
@@ -452,6 +443,23 @@ ident = do
         T (TkIdent name) m -> return $ Symb name m
         _ -> empty
 
+procIdent = startsWithUpper
+typeIdent = startsWithUpper
+consIdent = startsWithUpper
+funcIdent = startsWithLower
+
+startsWithLower = do
+    name <- ident
+    if Data.Char.isLower $ head $ toStr name
+    then return name
+    else empty
+
+startsWithUpper = do
+    name <- ident
+    if Data.Char.isUpper $ head $ toStr name
+    then return name
+    else empty
+
 symbIdent :: Parser Symbol
 symbIdent = do
     x <- item
@@ -459,11 +467,11 @@ symbIdent = do
         T (TkSymb name) m -> return $ Symb name m
         _ -> empty
 
-literal :: Parser Literal
+literal :: Parser Expression
 literal = do
     x <- item
     case x of
-        T (TkLit lit) _ -> return lit
+        T (TkLit lit) _ -> return $ Lit lit
         _ -> empty
 
 wspace :: Parser Whitespace
@@ -535,13 +543,13 @@ defineParameters (BoundParams ps) = do
                     p <- defineName p (ExprVal $ Just t)
                     return $ Param p c
 
--- | Defines a name without beginning a scope.
+-- | Defines a name without beginning an attached scope.
 defineName name elem = do
     definedName <- beginScope name elem
     endScope
     return definedName
 
--- | Pushes scope into scope stack and defines the name.
+-- | Defines the name and begins an attached scope.
 beginScope :: Symbol -> CurrentElement -> Parser Symbol
 beginScope (Symb (IDENTIFIER name) m) elem = do
     s <- getState
@@ -568,7 +576,7 @@ pushScopeLambda elem = do
     beginScope (Symb (IDENTIFIER $ "_L" ++ show lambdaNo) (Meta 0 0 "")) elem
     where consumeLambdaNo = P $ (\(inp, scope, lambdaNo, table, err) -> Left (lambdaNo, (inp, scope, lambdaNo + 1, table, err)))
 
--- | Update current ScopeState to parent scope of caller.
+-- | Pops current scope, updating scope state to point to parent scope.
 endScope :: Parser ()
 endScope = do
     s <- getState
@@ -600,7 +608,7 @@ insertEntry entry = P (\(inp, s, lambdaNo, (id, table), err) ->
 -- Debugging Helpers
 
 prog = "record Point = P\nY : Int\ntype A = A | B Int\nMain : Unit -> Unit\nMain a\n{\nx = b => b 1\ny = add 2\n}\nadd : Int X Int -> Int\nadd x1 y1 = x1"
--- prog = "Main : Unit -> Unit\nMain a\n{\nx = b => b 1\ny = add 2\n}\nadd : Int X Int -> Int\nadd x1 y1 = x1"
+-- prog = "Main : Unit -> Unit\nMain a\n{\nx = b => b 1\ny = add 2\n}\n"
 -- prog = "DoThis : Unit X Int -> Unit\nDoThis x1 y1\n{\nx = x1\n}"
 
 x = debugParser valueVarDef "add : Int X Int -> Int\nadd x y = x + y"
@@ -616,7 +624,7 @@ processStr str = case Frontend.LexicalAnalysis.Scanner.scan str of
 
 paramBinder str = do
     ts <- sigArrow
-    params <- return $ foldl (\aux x -> aux++[name x]) [] str
+    params <- return $ foldl (\aux x -> aux ++ [name x]) [] str
     bindParams ts (fromList params)
-    where
-        name str = Param (Symb (IDENTIFIER str) (Meta 0 0 "")) ByVal
+    
+    where name str = Param (Symb (IDENTIFIER str) (Meta 0 0 "")) ByVal

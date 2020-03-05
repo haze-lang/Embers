@@ -60,7 +60,6 @@ insertBool = do
     updateTableEntry' typeId (EntryType (getSymb "Bool") (getAbs $ getSymb "Bool") Global (Def (False, SType [consId1, consId2])))
 
 insertChar = insertTypeEntry (getSymb "Char") [] False
-
 insertString = insertTypeEntry (getSymb "String") [] False
 insertInt = insertTypeEntry (getSymb "Int") [] False
 
@@ -71,7 +70,6 @@ insertVarEntry name varType = insertTableEntry' $ EntryVar name (getAbs name) Gl
 insertValConsEntry name varType = insertTableEntry' $ EntryValCons name (getAbs name) Global (Def varType)
 
 getAbs (Symb (IDENTIFIER n) _) = n :| ["Global"]
--- getAbs (Symb (ResolvedName _ n) _) = n
 
 getSymb name = Symb (IDENTIFIER name) (Meta 0 0 "StandardLibrary.hz")
 
@@ -111,7 +109,7 @@ updateTableEntry id newEntry table = case M.lookup id table of
 lookupTableEntry :: ID -> SymTable -> Maybe TableEntry
 lookupTableEntry = M.lookup
 
--- Misc
+-- Table Structure
 
 type AbsoluteName = NonEmpty String -- Only used for lookup when symbols have not been resolved.
 type Name = Symbol

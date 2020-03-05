@@ -21,30 +21,27 @@ module Frontend.LexicalAnalysis.Token where
 
 import Data.List.NonEmpty
 
-data Whitespace = Space
-                | Tab
-                | Newline deriving (Show,Eq)
+data Whitespace
+    = Space
+    | Tab
+    | Newline deriving (Show,Eq)
 
-data Literal = NUMBER Int
-            | CHAR Char
-            | STRING String
-            | UNIT deriving (Show,Eq)
+data Literal
+    = NUMBER Int
+    | CHAR Char
+    | STRING String
+    | UNIT deriving (Show,Eq)
 
-data Identifier = IDENTIFIER String
-                | ResolvedName Int (NonEmpty String) deriving (Show,Eq)
+data Identifier = IDENTIFIER String | ResolvedName Int (NonEmpty String) deriving (Show,Eq)
 
-newtype ProcName = PROCEDURE String deriving (Show,Eq)
-newtype FuncName = FUNCTION String deriving (Show,Eq)
-newtype ParamName = PARAM String deriving (Show,Eq)
-newtype TypeName = TYPENAME String deriving (Show,Eq)
-
-data TokenType = TYPE | RECORD | IF | THEN | ELSE | SWITCH | DEFAULT    -- Keywords
-            | BAR | EQUALS | COLON | COMMA | ARROW | LPAREN | RPAREN | LBRACE | RBRACE | DARROW | BSLASH | CROSS | SEMICOLON   -- Symbols
-            | TkIdent Identifier | TkSymb Identifier -- Identifiers
-            | TkLit Literal                             -- Literals
-            | WHITESPACE Whitespace                     -- Space/Newline
-            | COMMENT
-            | Invalid String deriving (Show,Eq)
+data TokenType
+    = TYPE | RECORD | IF | THEN | ELSE | SWITCH | DEFAULT    -- Keywords
+    | BAR | EQUALS | COLON | COMMA | ARROW | LPAREN | RPAREN | LBRACE | RBRACE | DARROW | BSLASH | CROSS | SEMICOLON   -- Symbols
+    | TkIdent Identifier | TkSymb Identifier
+    | TkLit Literal
+    | WHITESPACE Whitespace
+    | COMMENT
+    | Invalid String deriving (Show,Eq)
 
 data Token = T TokenType Metadata deriving (Show,Eq)
 
@@ -59,3 +56,5 @@ instance Eq Metadata where
 incCol (Meta c l f) = Meta (c + 1) l f
 decCol (Meta c l f) = Meta (c - 1) l f
 incLine (Meta c l f) = Meta 0 (l + 1) f
+
+data StrSource = Str String Metadata deriving Show

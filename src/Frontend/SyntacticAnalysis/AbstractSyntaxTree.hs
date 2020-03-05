@@ -24,30 +24,25 @@ import Data.List.NonEmpty
 
 data Program = Program [ProgramElement] deriving (Show,Eq)
 
-data ProgramElement = Ty Type | Pr Procedure | Fu Function | Ex ExpressionVariable deriving (Show,Eq)
+data ProgramElement
+    = Ty Type
+    | Proc MappingType Symbol Block
+    | Func MappingType Symbol Expression
+    | ExpressionVar TypeExpression Symbol Expression
+    deriving (Show,Eq)
 
-data ExpressionVariable = ExpressionVar TypeExpression Symbol Expression deriving (Show,Eq)
+newtype Block = Block (NonEmpty Statement) deriving (Show,Eq)
 
-data Procedure = Proc MappingType Symbol Block deriving (Show,Eq)
+data Statement
+    = StmtExpr Expression
+    | Assignment Symbol Expression deriving (Show,Eq)
 
-data Block = Block (NonEmpty Statement) deriving (Show,Eq)
+data Type
+    = Record Symbol Symbol (NonEmpty RecordMember)          -- Members' types must be a type name, not a type expression.
+    | SumType Symbol (NonEmpty ValueCons)
+    deriving (Show,Eq)
 
-data Statement = StmtExpr Expression
-                | StmtAssign Assignment deriving (Show,Eq)
-
-data Assignment = Assignment Symbol Expression deriving (Show,Eq)
-
-data Function = Func MappingType Symbol Expression deriving (Show,Eq)
-
-data Type = TypeRec Record
-        | TypeSumProd SumType
-        deriving (Show,Eq)
-
-data Record = Record Symbol Symbol (NonEmpty RecordMember) deriving (Show,Eq)           -- Members' types must be a type name, not a type expression.
-
-data RecordMember = RecordMember Symbol Symbol deriving (Show,Eq)
-
-data SumType = SumType Symbol (NonEmpty ValueCons) deriving (Show,Eq)
+type RecordMember = (Symbol, Symbol)
 
 -- Product Type
 data ValueCons = ValCons Symbol [Symbol] deriving (Show,Eq)
@@ -58,36 +53,31 @@ newtype BoundParameters = BoundParams [(Parameter, TypeExpression)] deriving (Sh
 
 data Parameter = Param Symbol CallMode deriving (Show, Eq)
 
-data CallMode = ByVal | ByRef deriving (Show, Eq)
+data CallMode
+    = ByVal
+    | ByRef
+    deriving (Show, Eq)
 
 data TypeSignature = TypeSig Symbol TypeExpression deriving (Show,Eq)
 
-data TypeExpression = TArrow TypeExpression TypeExpression
-        | TProd (NonEmpty TypeExpression)
-        | TSymb Symbol
-        deriving (Show,Eq)
+data TypeExpression
+    = TArrow TypeExpression TypeExpression
+    | TProd (NonEmpty TypeExpression)
+    | TSymb Symbol
+    deriving (Show,Eq)
 
-data Expression = ExprApp ApplicationExpression
-                | ExprSwitch SwitchExpression
-                | ExprCond ConditionalExpression
-                | ExprLambda LambdaExpression
-                | ExprTuple TupleExpression
-                | ExprIdent Symbol
-                | ExprLit Literal
-                deriving (Show,Eq)
-
-data ApplicationExpression = App Expression Expression deriving (Show,Eq)
-
-data ConditionalExpression = ConditionalExpr Expression Expression Expression deriving (Show,Eq)
-
-data SwitchExpression = SwitchExpr Expression (NonEmpty (Pattern, Expression)) Expression deriving (Show,Eq)
-
-data TupleExpression = Tuple (NonEmpty Expression) deriving (Show,Eq)
+data Expression 
+    = App Expression Expression
+    | Switch Expression (NonEmpty (Expression, Expression)) Expression      -- TODO
+    | Conditional Expression Expression Expression
+    | Lambda LambdaExpression
+    | Tuple (NonEmpty Expression)
+    | Ident Symbol
+    | Lit Literal
+    deriving (Show,Eq)
 
 data Symbol = Symb Identifier Metadata deriving (Show,Eq)
 
--- TODO
-data Pattern = Pat Expression deriving (Show,Eq)
-
-data LambdaExpression = ProcLambda Symbol (NonEmpty Parameter) Block
-                | FuncLambda Symbol (NonEmpty Parameter) Expression deriving (Show,Eq)
+data LambdaExpression
+    = ProcLambda Symbol (NonEmpty Parameter) Block
+    | FuncLambda Symbol (NonEmpty Parameter) Expression deriving (Show,Eq)
