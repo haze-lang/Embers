@@ -1,53 +1,43 @@
-name:                Embers
-version:             0.1.0.0
-github:              "syp-lang/Embers"
-license:             GPL-3.0-or-later
-author:              "Syed Moiz Ur Rehman"
-maintainer:          "syedmoizurrehman@hotmail.com"
-copyright:           "2019 Syed Moiz Ur Rehman"
-
+library:
+  source-dirs: src
+tests:
+  Embers-test:
+    source-dirs: test
+    main: Spec.hs
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - Embers
+copyright: 2019 Syed Moiz Ur Rehman
+maintainer: syedmoizurrehman@hotmail.com
+dependencies:
+- mtl
+- transformers
+- containers
+- base >= 4.7 && < 5
+- hspec
+- QuickCheck
+- optparse-applicative
+- semigroups
+- pretty-simple
+name: Embers
+version: 0.1.0.0
 extra-source-files:
 - README.md
 - ChangeLog.md
-
-# Metadata used when publishing your package
-# synopsis:            Short description of your package
-# category:            Web
-
-# To avoid duplicated efforts in documentation and dealing with the
-# complications of embedding Haddock markup inside cabal files, it is
-# common to point users to the README.md file.
-description:         Please see the README on GitHub at <https://github.com/syp-lang/Embers#readme>
-
-dependencies:
-- containers
-- base >= 4.7 && < 5
-- hspec # X11 (MIT)
-- QuickCheck # BSD-3-Clause
-- optparse-applicative # BSD-3-Clause
-- semigroups # BSD-3-Clause
-- pretty-simple # BSD-3-Clause
-library:
-  source-dirs: src
-
+author: Syed Moiz Ur Rehman
+github: syp-lang/Embers
+license: GPL-3.0-or-later
 executables:
   Embers:
-    main:                Main.hs
-    source-dirs:         app
+    source-dirs: app
+    main: Main.hs
     ghc-options:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
     - Embers
-
-tests:
-  Embers-test:
-    main:                Spec.hs
-    source-dirs:         test
-    ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
-    dependencies:
-    - Embers
+description: Please see the README on GitHub at <https://github.com/syp-lang/Embers#readme>

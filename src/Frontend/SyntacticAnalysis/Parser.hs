@@ -19,14 +19,14 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 
 module Frontend.SyntacticAnalysis.Parser where
 
-import Frontend.SyntacticAnalysis.AbstractSyntaxTree
-import Frontend.StaticAnalysis.ProgramTable (
+import Frontend.AbstractSyntaxTree
+import CompilerUtilities.ProgramTable (
     TableEntry(EntryProc, EntryFunc, EntryValCons, EntryVar, EntryType),
     Definition(Def, Undefined),
     Scope(Scope, Global),
-    Table, ID, AbsoluteName,
-    updateTableEntry, insertTableEntry, lookupTableEntry, initializeTable)
-import Frontend.AbstractParser
+    Table, SymTable, ID, AbsoluteName,
+    updateTableEntry, insertTableEntry, lookupTableEntry, initializeTable, nameLookup)
+import CompilerUtilities.AbstractParser
 import Control.Applicative
 import Data.Char (isUpper, isLower)
 import Control.Monad (when)
@@ -36,7 +36,6 @@ import qualified Data.Map.Strict as M
 import Frontend.LexicalAnalysis.Token
 import qualified Frontend.LexicalAnalysis.Scanner
 import Frontend.LexicalAnalysis.Token
-import Text.Pretty.Simple (pPrint)
 
 -- |Parses the given token stream and returns syntax tree.
 parseTokens :: [Token] -> (Program, Table)
@@ -51,6 +50,7 @@ program = do
     many wspace
     v <- valueVarDef
     defs <- many (valueVarDef <|> typeVarDef)
+    many wspace
     return $ Program $ ts ++ v : defs
 
 typeVarDef :: Parser ProgramElement
@@ -96,16 +96,16 @@ procedure = do
     token (WHITESPACE Newline)
     body <- block
     endScope
-    return $ Proc (MappingType boundParams returnType) name body
+    return $ Proc boundParams returnType name body
 
-block :: Parser Block
+block :: Parser (NonEmpty Statement)
 block = do
     token LBRACE
     many wspace
     xs <- some terminatedStatement
     many wspace
     token RBRACE
-    return $ Block (fromList xs)
+    return $ fromList xs
     
     where
     terminatedStatement = do
@@ -142,7 +142,7 @@ function = do
     token EQUALS
     body <- expression
     endScope
-    return $ Func (MappingType boundParams returnType) name body
+    return $ Func boundParams returnType name body
 
 formalParam :: Parser (NonEmpty Parameter)
 formalParam = do
@@ -177,7 +177,11 @@ sigProd = do
 
 sigName :: Parser TypeExpression
 sigName = do
-    typeName <- ident
+    typeName <- typeIdent
+    args <- some (typeIdent <|> typeParamIdent)
+    return $ TApp typeName args
+    <|> do
+    typeName <- typeParamIdent <|> typeIdent
     return $ TSymb typeName
     <|> do
     token LPAREN
@@ -187,8 +191,8 @@ sigName = do
 
 bindParams (TArrow (TProd exprList) retType) params = do
     params <- bParams exprList params
-    return $ (BoundParams params, retType)
-    
+    return (params, retType)
+
     where
     bParams :: NonEmpty TypeExpression -> NonEmpty Parameter -> Parser [(Parameter, TypeExpression)]
     bParams (t:|[]) (p:|[]) = return [(p, t)]
@@ -197,7 +201,8 @@ bindParams (TArrow (TProd exprList) retType) params = do
             if length ts == 0 && length ps == 0
             then return [(p, t)]
             else error ""
-        TSymb s -> handleProd (Data.List.NonEmpty.reverse (t:|ts)) (Data.List.NonEmpty.reverse (p:|ps)) []
+        TSymb _ -> handleProd (Data.List.NonEmpty.reverse (t:|ts)) (Data.List.NonEmpty.reverse (p:|ps)) []
+        TApp _ _ -> handleProd (Data.List.NonEmpty.reverse (t:|ts)) (Data.List.NonEmpty.reverse (p:|ps)) []
         TProd prods ->
             if length ps == 0
             then handleProd (Data.List.NonEmpty.reverse prods) (Data.List.NonEmpty.reverse (p:|ps)) []
@@ -220,45 +225,56 @@ sumType :: Parser Type
 sumType = do
     token TYPE
     name <- typeIdent
-    name <- defineName name Type
+    name <- beginScope name Type
+    params <- many (do
+        x <- typeParamIdent
+        x <- defineName x $ ExprVal Nothing
+        return x)
     token EQUALS
     cons <- productType name
     conss <- many (do
         token BAR
         productType name)
+    endScope
     return $ SumType name (cons :| conss)
 
 productType :: Symbol -> Parser ValueCons
 productType typeName = do
     cons <- consIdent
     cons <- handleSameCons cons typeName
-    cons <- defineName cons Constructor
+    cons <- defineNameInParent cons Constructor
     operands <- consOperands
     return $ ValCons cons operands
     <|> do
     cons <- consIdent
     cons <- handleSameCons cons typeName
     let (Symb (ResolvedName typeId _) _) = typeName
-    cons <- defineName cons (NullConstructor typeId)
+    cons <- defineNameInParent cons (NullConstructor typeId)
     return $ ValCons cons []
 
     where
     consOperands = do
-        operand <- typeIdent -- 
+        operand <- typeIdent <|> typeParam
         operandList <- many restOperands
         return $ operand:operandList
         
-        where restOperands = token CROSS >>= const typeIdent
+        where
+        restOperands = token CROSS >>= const (typeIdent <|> typeParam)
+        
+        typeParam = do
+            p <- typeParamIdent
+            p <- resolveName p
+            return p
 
 recordType :: Parser Type
 recordType = do
     token RECORD
     typeName <- ident
+    typeName <- beginScope typeName Type
     token EQUALS
     cons <- ident
     cons <- handleSameCons cons typeName
-    cons <- defineName cons Constructor
-    typeName <- beginScope typeName Type    -- Start scope after cons has been defined so that cons is global.
+    cons <- defineNameInParent cons Constructor
     token $ WHITESPACE Newline
     members <- some members
     let (x:xs) = members
@@ -399,13 +415,13 @@ pattern = literal
 
 type LambdaNo = Int
 type ErrorState = [String]
-type ScopeState = (Scope, AbsoluteName, [CurrentElement])
+type ScopeState = (Scope, AbsoluteName)
 type ParserState = ([Token], ScopeState, LambdaNo, Table, ErrorState)
 
 initParserState :: [Token] -> ParserState
-initParserState tokens = (tokens, (Global, "Global" :| [], []), 0, initializeTable, [])
+initParserState tokens = (tokens, (Global, "Global" :| []), 0, initializeTable, [])
 
-type Parser a = Frontend.AbstractParser.AbsParser ParserState a
+type Parser a = AbsParser ParserState a
 
 -- State Manipulation
 item :: Parser Token
@@ -447,6 +463,7 @@ procIdent = startsWithUpper
 typeIdent = startsWithUpper
 consIdent = startsWithUpper
 funcIdent = startsWithLower
+typeParamIdent = startsWithLower
 
 startsWithLower = do
     name <- ident
@@ -502,10 +519,10 @@ resolveName name = do
 resolve :: Symbol -> Parser (Maybe Symbol)
 resolve (Symb (IDENTIFIER name) m) = do
     s <- getState
-    let (_, (_, absName, _), _, tableState, _) = s
-    resolve' name absName absName tableState
+    let (_, (_, absName), _, (_, table), _) = s
+    resolve' name absName absName table
     where
-        resolve' :: String -> AbsoluteName -> AbsoluteName -> Table -> Parser (Maybe Symbol)
+        resolve' :: String -> AbsoluteName -> AbsoluteName -> SymTable -> Parser (Maybe Symbol)
         resolve' name absName originalTrace tableState = do
             case nameLookup (makeAbs name absName) tableState of
                 Just (id, _) -> return $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
@@ -516,32 +533,20 @@ resolve (Symb (IDENTIFIER name) m) = do
         qualifyName (_ :| []) = Nothing
         qualifyName (name :| trace) = Just $ Data.List.NonEmpty.fromList trace
 
-        nameLookup :: AbsoluteName -> Table -> Maybe (ID, TableEntry)
-        nameLookup name (_, table) = case M.toList $ M.filter (search name) table of
-            x:[] -> Just x
-            x:_ -> Just x   -- Error/Bug
-            [] -> Nothing
-            where
-            -- Look for var in scope.
-            search absName entry = case entry of
-                EntryProc _ entryName _ _ -> entryName == absName
-                EntryFunc _ entryName _ _ -> entryName == absName
-                EntryValCons _ entryName _ _ -> entryName == absName
-                EntryType _ entryName _ _ -> entryName == absName
-                EntryVar _ entryName _ _ -> entryName == absName
-
-defineParameters (BoundParams ps) = do
+defineParameters ps = do
     ps <- defineParams ps []
-    return $ BoundParams ps
+    return $ ps
+
     where
-        defineParams [] aux = return aux
-        defineParams ((p, t):ps) aux = do
-            p <- defineParam (p, t)
-            defineParams ps (aux++[(p, t)])
-            where
-                defineParam ((Param p c), t) = do
-                    p <- defineName p (ExprVal $ Just t)
-                    return $ Param p c
+    defineParams [] aux = return aux
+    defineParams ((p, t):ps) aux = do
+        p <- defineParam (p, t)
+        defineParams ps (aux ++ [(p, t)])
+
+        where
+        defineParam ((Param p c), t) = do
+            p <- defineName p (ExprVal $ Just t)
+            return $ Param p c
 
 -- | Defines a name without beginning an attached scope.
 defineName name elem = do
@@ -553,7 +558,7 @@ defineName name elem = do
 beginScope :: Symbol -> CurrentElement -> Parser Symbol
 beginScope (Symb (IDENTIFIER name) m) elem = do
     s <- getState
-    let (inp, (scopeId, ns, elemStack), lambdaNo, _, err) = s
+    let (inp, (scopeId, ns), lambdaNo, _, err) = s
     absName <- return $ name <| ns
     id <- case elem of
         Procedure -> insertEntry $ EntryProc (Symb (IDENTIFIER name) m) absName scopeId Undefined
@@ -567,7 +572,7 @@ beginScope (Symb (IDENTIFIER name) m) elem = do
     -- TableState is changed after insertion, so we extract the updated table.
     s <- getState
     let (_, _, _, table, _) = s
-    setState (inp, (Scope id, absName, elem:elemStack), lambdaNo, table, err)
+    setState (inp, (Scope id, absName), lambdaNo, table, err)
     return $ Symb (ResolvedName id absName) m
 
 pushScopeLambda :: CurrentElement -> Parser Symbol
@@ -580,12 +585,12 @@ pushScopeLambda elem = do
 endScope :: Parser ()
 endScope = do
     s <- getState
-    let (inp, (scopeId, (n :| ns), (_:elem)), lambdaNo, table, err) = s
-    setState (inp, (scopeId, fromList ns, elem), lambdaNo, table, err)
+    let (inp, (scopeId, (n :| ns)), lambdaNo, table, err) = s
+    setState (inp, (scopeId, fromList ns), lambdaNo, table, err)
     updateScopeId
     where updateScopeId = do
             s <- getState
-            let (inp, ((Scope scopeId), ns, stack), lambdaNo, (nextId, table), err) = s
+            let (inp, ((Scope scopeId), ns), lambdaNo, (nextId, table), err) = s
             parentScope <- return $ case lookupTableEntry scopeId table of
                 Just (EntryProc _ _ parentScope _) -> parentScope
                 Just (EntryFunc _ _ parentScope _) -> parentScope
@@ -593,7 +598,26 @@ endScope = do
                 Just (EntryType _ _ parentScope _) -> parentScope
                 Just (EntryVar _ _ parentScope _) -> parentScope
                 Nothing -> Global
-            setState (inp, (parentScope, ns, stack), lambdaNo, (nextId, table), err)
+            setState (inp, (parentScope, ns), lambdaNo, (nextId, table), err)
+
+defineNameInParent (Symb (IDENTIFIER name) m) elem = do
+    s <- getState
+    let (inp, (scopeId, (n:|ns)), lambdaNo, _, err) = s
+    absName <- return $ name :| ns
+    id <- case elem of
+        Procedure -> insertEntry $ EntryProc (Symb (IDENTIFIER name) m) absName scopeId Undefined
+        Function -> insertEntry $ EntryFunc (Symb (IDENTIFIER name) m) absName scopeId Undefined
+        Constructor -> insertEntry $ EntryValCons (Symb (IDENTIFIER name) m) absName scopeId Undefined
+        NullConstructor typeId -> insertEntry $ EntryValCons (Symb (IDENTIFIER name) m) absName scopeId (Def (typeId, []))
+        Type -> insertEntry $ EntryType (Symb (IDENTIFIER name) m) absName scopeId Undefined
+        ExprVal varType -> insertEntry $ EntryVar (Symb (IDENTIFIER name) m) absName scopeId $ case varType of
+            Just varType -> Def varType
+            Nothing -> Undefined
+    -- TableState is changed after insertion, so we extract the updated table.
+    s <- getState
+    let (_, _, _, table, _) = s
+    setState (inp, (Scope id, (n:|ns)), lambdaNo, table, err)
+    return $ Symb (ResolvedName id absName) m
 
 toStr :: Symbol -> String
 toStr (Symb (IDENTIFIER x) _) = x
@@ -604,27 +628,3 @@ insertEntry entry = P (\(inp, s, lambdaNo, (id, table), err) ->
     case insertTableEntry id entry table of
         Just t -> Left (id, (inp, s, lambdaNo, (id + 1, t), err))
         Nothing -> Right (inp, s, lambdaNo, (id, table), err))
-
--- Debugging Helpers
-
-prog = "record Point = P\nY : Int\ntype A = A | B Int\nMain : Unit -> Unit\nMain a\n{\nx = b => b 1\ny = add 2\n}\nadd : Int X Int -> Int\nadd x1 y1 = x1"
--- prog = "Main : Unit -> Unit\nMain a\n{\nx = b => b 1\ny = add 2\n}\n"
--- prog = "DoThis : Unit X Int -> Unit\nDoThis x1 y1\n{\nx = x1\n}"
-
-x = debugParser valueVarDef "add : Int X Int -> Int\nadd x y = x + y"
-
-debugParserTable p str = parse p (initParserState $ processStr str)
-
-debugParser p str = case parse p (initParserState $ processStr str) of
-    Left (a, (_, _, _, _, err)) -> (a, err)
-    Right (_, _, _, _, err) -> error $ "Syntax error. " ++ show err
-
-processStr str = case Frontend.LexicalAnalysis.Scanner.scan str of
-    (tokens, []) -> Prelude.filter (not.Frontend.LexicalAnalysis.Scanner.isSpaceToken) tokens
-
-paramBinder str = do
-    ts <- sigArrow
-    params <- return $ foldl (\aux x -> aux ++ [name x]) [] str
-    bindParams ts (fromList params)
-    
-    where name str = Param (Symb (IDENTIFIER str) (Meta 0 0 "")) ByVal

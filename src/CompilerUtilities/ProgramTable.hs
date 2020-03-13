@@ -17,27 +17,31 @@ You should have received a copy of the GNU General Public License
 along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
-module Frontend.StaticAnalysis.ProgramTable
+module CompilerUtilities.ProgramTable
 where
 
 import Data.Map.Strict (Map)
-import Frontend.SyntacticAnalysis.AbstractSyntaxTree
-import Frontend.AbstractParser
-import Data.List.NonEmpty (NonEmpty((:|)))
+import Frontend.AbstractSyntaxTree
+import CompilerUtilities.AbstractParser
+import Data.List.NonEmpty (NonEmpty((:|)), (<|))
 import qualified Data.Map.Strict as M
 import Frontend.LexicalAnalysis.Token
-
-type Table = (NextID, SymTable)
-type NextID = ID
-type SymTable = M.Map ID TableEntry
-type ID = Int
-
-data Scope = Scope ID
-            | Global deriving (Eq,Show)
 
 initializeTable :: Table
 initializeTable = case parse stdLib (0, M.fromList []) of
     Left (_, state) -> state
+
+type Table = (NextID, SymTable)
+type SymTable = M.Map ID TableEntry
+
+data TableEntry
+    = EntryProc Name AbsoluteName Scope (Definition ([ParamId], ReturnType))
+    | EntryFunc Name AbsoluteName Scope (Definition ([ParamId], ReturnType))
+    | EntryValCons Name AbsoluteName Scope (Definition (TypeId, [ParamId]))
+    | EntryVar Name AbsoluteName Scope (Definition VarType)
+    | EntryType Name AbsoluteName Scope (Definition (SameNameCons, TypeDef))
+    | EntryTypeCons Name AbsoluteName Scope (Definition (SameNameCons, TypeDef))  -- Parametric Types
+    deriving (Show,Eq)
 
 stdLib = do
     insertUnit
@@ -77,7 +81,7 @@ getResolvedSymb id name = Symb (ResolvedName id (name:|["Global"])) (Meta 0 0 "S
 
 -- Table Manipulation
 
-type TableManipulator a = AbsParser (NextID, SymTable) a
+type TableManipulator a = AbsParser Table a
 
 insertTableEntry' :: TableEntry -> TableManipulator ID
 insertTableEntry' entry = P (\(id, table) ->
@@ -91,7 +95,7 @@ updateTableEntry' id newEntry = P (\(id', table) ->
         Just t -> Left ((), (id', t))
         Nothing -> Right (id', table))
 
--- Table Helpers
+-- Table Utilities
 
 -- | Only inserts a value if key does not already exist.
 insertTableEntry :: ID -> TableEntry -> SymTable -> Maybe SymTable
@@ -109,9 +113,50 @@ updateTableEntry id newEntry table = case M.lookup id table of
 lookupTableEntry :: ID -> SymTable -> Maybe TableEntry
 lookupTableEntry = M.lookup
 
--- Table Structure
+nameLookup :: AbsoluteName -> SymTable -> Maybe (ID, TableEntry)
+nameLookup name table = case M.toList $ M.filter (search name) table of
+    x:[] -> Just x
+    x:xs -> error $ "Multiple bindings found for " ++ show name ++ ": " ++ show xs   -- Error/Bug
+    [] -> Nothing
 
-type AbsoluteName = NonEmpty String -- Only used for lookup when symbols have not been resolved.
+    where
+    -- Look for var in scope.
+    search absName entry = case entry of
+        EntryProc _ entryName _ _ -> entryName == absName
+        EntryFunc _ entryName _ _ -> entryName == absName
+        EntryValCons _ entryName _ _ -> entryName == absName
+        EntryType _ entryName _ _ -> entryName == absName
+        EntryVar _ entryName _ _ -> entryName == absName
+
+-- Standard Library Utilities
+
+boolId table = f "Bool" table
+unitId table = f "Unit" table
+stringId table = f "String" table
+intId table = f "Int" table
+
+f name table = case nameLookup (name:|["Global"]) table of
+    Just (id, EntryType (Symb (IDENTIFIER name) m) absName _ _) -> Symb (ResolvedName id absName) m
+    Nothing -> error $ "Standard Library Initialization Error:" ++ name ++ " not found."
+
+-- Helper Types & Aliases
+
+data Scope
+    = Scope ID
+    | Global deriving (Eq,Show)
+
+data Definition a
+    = Def a
+    | Undefined deriving (Show,Eq)
+
+data TypeDef
+    = RecType VCons [(FieldVar, FieldType)]
+    | SType [VCons]
+    deriving (Show,Eq)
+
+type ID = Int
+type NextID = ID
+type AbsoluteName = NonEmpty String -- Alternate unique identifier.
 type Name = Symbol
 type ReturnType = TypeExpression
 type Param = Identifier
@@ -122,18 +167,3 @@ type FieldType = ID
 type SameNameCons = Bool
 type TypeId = ID
 type ParamId = ID
-
-data TableEntry = EntryProc Name AbsoluteName Scope (Definition [ParamId])
-                | EntryFunc Name AbsoluteName Scope (Definition [ParamId])
-                | EntryValCons Name AbsoluteName Scope (Definition (TypeId, [ParamId]))
-                | EntryVar Name AbsoluteName Scope (Definition VarType)
-                | EntryType Name AbsoluteName Scope (Definition (SameNameCons, TypeDef))
-                | EntryTypeCons Name AbsoluteName Scope (Definition (SameNameCons, TypeDef))  -- Parametric Types
-                deriving (Show,Eq)
-
-data Definition a = Def a
-                | Undefined deriving (Show,Eq)
-
-data TypeDef = RecType VCons [(FieldVar, FieldType)]
-                | SType [VCons]
-                 deriving (Show,Eq)

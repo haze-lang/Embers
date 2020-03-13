@@ -20,26 +20,27 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 module Frontend.StaticAnalysis.ProgramInitializer
 (
     initializeProgram,
-    debugInitializer
 )
 where
 
 import Control.Applicative (many, empty, (<|>))
-import Frontend.AbstractParser
+import CompilerUtilities.AbstractParser
 import Frontend.LexicalAnalysis.Token
+import qualified Data.Char (isUpper)
 import qualified Data.Map.Strict as M
-import Frontend.StaticAnalysis.ProgramTable (
+import CompilerUtilities.ProgramTable (
     ID,
     Scope,
     Table,
+    SymTable,
     AbsoluteName,
-    TableEntry(EntryProc, EntryFunc, EntryValCons, EntryType, EntryVar),
+    TableEntry(EntryProc, EntryFunc, EntryValCons, EntryType, EntryVar, EntryTypeCons),
     Definition(Def),
     TypeDef(SType, RecType),
     Scope(Scope, Global),
-    updateTableEntry, lookupTableEntry)
-import Frontend.SyntacticAnalysis.AbstractSyntaxTree
+    updateTableEntry, lookupTableEntry, nameLookup)
 import qualified Frontend.SyntacticAnalysis.Parser as P
+import Frontend.AbstractSyntaxTree
 import Data.List.NonEmpty (NonEmpty((:|)), (<|), fromList, toList)
 import Data.Foldable (foldlM)
 
@@ -58,25 +59,27 @@ programElement = do
     elem <- item
     case elem of
         Ty t -> _type t
-        Proc _ _ _ -> procedure elem
-        Func _ _ _ -> function elem
-        ExpressionVar _ _ _ -> expr elem
+        Proc {} -> procedure elem
+        Func {} -> function elem
+        ExpressionVar {} -> expr elem
 
 procedure :: ProgramElement -> Initializer ProgramElement
-procedure (Proc procType name body) = do
+procedure (Proc paramType retType name body) = do
     pushScope name
-    procType <- mappingType procType
+    procType <- mappingType (paramType, retType)
+    let (paramType, retType) = procType
     body <- block body
-    p <- return $ Proc procType name body
+    p <- return $ Proc paramType retType name body
     popScope p
     return p
 
 function :: ProgramElement -> Initializer ProgramElement
-function (Func funcType name body) = do
+function (Func paramType retType name body) = do
     pushScope name
-    funcType <- mappingType funcType
+    funcType <- mappingType (paramType, retType)
+    let (paramType, retType) = funcType
     body <- expression body
-    f <- return $ Func funcType name body
+    f <- return $ Func paramType retType name body
     popScope f
     return f
 
@@ -132,10 +135,10 @@ expr (ExpressionVar t name e) = do
     e <- expression e
     return $ ExpressionVar t name e
 
-block :: Block -> Initializer Block
-block (Block stmts) = do
+block :: (NonEmpty Statement) -> Initializer (NonEmpty Statement)
+block stmts = do
     stmts <- statements (toList stmts)
-    return $ Block $ fromList stmts
+    return $ fromList stmts
     
     where statements = foldlM (\aux s -> statement s >>= \s -> return $ aux ++ [s]) []
 
@@ -203,16 +206,16 @@ expression (App l arg) = do
     arg <- expression arg
     return $ App l arg
 
-mappingType :: MappingType -> Initializer MappingType
-mappingType (MappingType ps retType) = do
+mappingType :: ([(Parameter, TypeExpression)], TypeExpression) -> Initializer ([(Parameter, TypeExpression)], TypeExpression)
+mappingType (ps, retType) = do
     ps <- boundParams ps
     retType <- typeExpression retType
-    return $ MappingType ps retType
+    return (ps, retType)
 
-boundParams :: BoundParameters -> Initializer BoundParameters
-boundParams (BoundParams ps) = do
+boundParams :: [(Parameter, TypeExpression)] -> Initializer [(Parameter, TypeExpression)]
+boundParams ps = do
     ps <- boundParams' ps
-    return $ BoundParams ps
+    return ps
     
     where
     boundParams' = foldlM (\aux ((Param name callMode), typeExpr) -> do
@@ -221,9 +224,30 @@ boundParams (BoundParams ps) = do
         return $ aux ++ [((Param name callMode), typeExpr)]) []
 
 typeExpression :: TypeExpression -> Initializer TypeExpression
-typeExpression (TSymb name) = do
+typeExpression (TApp name args) = do
     name <- resolveTypeName name
-    return $ TSymb name
+    args <- typeArgs args
+    return $ TApp name args
+
+    where
+    typeArgs = foldlM (\aux arg -> do
+        arg <-
+            if isTypeName arg
+            then resolveName arg
+            else return arg
+        return $ aux ++ [arg]) []
+        
+        where isTypeName name = Data.Char.isUpper (head $ toStr name)
+
+typeExpression (TSymb name) = do
+    if isTypeName name
+    then do
+        name <- resolveTypeName name
+        return $ TSymb name
+    else return $ TSymb name    -- Type parameters will not be resolved here.
+    
+    where isTypeName name = Data.Char.isUpper (head $ toStr name)
+
 typeExpression (TArrow l r) = do
     l <- typeExpression l
     r <- typeExpression r
@@ -255,14 +279,14 @@ resolveTypeName name = do
         Nothing -> error $ "Unresolved symbol: " ++ show name
 
 resolve :: Symbol -> Bool -> Initializer (Maybe Symbol)
-resolve (Symb (ResolvedName id (name:|absName)) _) _ = error $ "resolved called on already resolved name: " ++ name
+resolve (Symb (ResolvedName id absName) m) _ = return $ Just $ (Symb (ResolvedName id absName) m)
 resolve (Symb (IDENTIFIER name) m) isType = do
     s <- getState
-    let (_, (_, absName, assignedSym), tableState, e) = s
-    resolve' name absName absName tableState assignedSym
+    let (_, (_, absName, assignedSym), (_, table), e) = s
+    resolve' name absName absName table assignedSym
 
     where
-    resolve' :: String -> AbsoluteName -> AbsoluteName -> Table -> Maybe Symbol -> Initializer (Maybe Symbol)
+    resolve' :: String -> AbsoluteName -> AbsoluteName -> SymTable -> Maybe Symbol -> Initializer (Maybe Symbol)
     resolve' name absName originalTrace tableState assignedSym = do
         case nameLookup (makeAbs name absName) tableState of
             Just (id, entry) ->
@@ -292,25 +316,11 @@ resolve (Symb (IDENTIFIER name) m) isType = do
                 EntryFunc _ (_:|entryName) _ _ -> entryName
                 EntryType _ (_:|entryName) _ _ -> entryName
                 EntryVar _ (_:|entryName) _ _ -> entryName
+                EntryValCons _ (_:|entryName) _ _ -> entryName
 
     makeAbs = (<|)
     qualifyName (_ :| []) = Nothing
     qualifyName (name :| trace) = Just $ Data.List.NonEmpty.fromList trace
-
-    nameLookup :: AbsoluteName -> Table -> Maybe (ID, TableEntry)
-    nameLookup name (_, table) = case M.toList $ M.filter (search name) table of
-        x:[] -> Just x
-        x:xs -> error $ "Multiple bindings found for " ++ show name ++ ": " ++ show xs   -- Error/Bug
-        [] -> Nothing
-
-        where
-        -- Look for var in scope.
-        search absName entry = case entry of
-            EntryProc _ entryName _ _ -> entryName == absName
-            EntryFunc _ entryName _ _ -> entryName == absName
-            EntryValCons _ entryName _ _ -> entryName == absName
-            EntryType _ entryName _ _ -> entryName == absName
-            EntryVar _ entryName _ _ -> entryName == absName
 
 -- | Pushes scope into scope stack and defines the name.
 pushScope :: Symbol -> Initializer ()
@@ -335,8 +345,8 @@ popScope elem = do
     updateEntry scopeId $ getEntry elem scope absName
 
     where
-    getEntry (Proc (MappingType (BoundParams paramsTypes) _) name _) parentScope absName = EntryProc name absName parentScope (Def (getParamIds paramsTypes))
-    getEntry (Func (MappingType (BoundParams paramsTypes) _) name _) parentScope absName = EntryFunc name absName parentScope (Def (getParamIds paramsTypes))
+    getEntry (Proc paramsTypes retType name _) parentScope absName = EntryProc name absName parentScope (Def (getParamIds paramsTypes, retType))
+    getEntry (Func paramsTypes retType name _) parentScope absName = EntryFunc name absName parentScope (Def (getParamIds paramsTypes, retType))
     getParamIds = foldr (\((Param s _), _) a -> (getSymId s):a) []
     
     updateScopeId = do
@@ -423,8 +433,3 @@ type Initializer a = AbsParser State a
 
 initInitializerState :: Program -> Table -> State
 initInitializerState p t = (p, (Global, "Global" :| [], Nothing), t, [])
-
-debugInitializer inp = case P.debugParserTable P.program inp of
-    Left (p, ([], _, _, t, err)) -> initializeProgram (p, t)
-    Left (p, (ts, _, _, t, err)) -> error $ "Rest: " ++ show ts
-    Right a -> error "Syntax Error"

@@ -20,11 +20,11 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 module Frontend.LexicalAnalysis.Scanner
 (
     scan,
-    isSpaceToken
+    scanProcessed,
 )
 where
 
-import Frontend.AbstractParser
+import CompilerUtilities.AbstractParser
 import Frontend.LexicalAnalysis.Token
 import Control.Applicative
 import qualified Data.Char
@@ -297,3 +297,6 @@ alpha = sat Data.Char.isAlpha
 
 digit :: Lexer Char
 digit = sat Data.Char.isDigit
+
+scanProcessed str = case scan str of
+    (tokens, []) -> Prelude.filter (not.isSpaceToken) tokens

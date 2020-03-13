@@ -22,7 +22,7 @@ module Main where
 import System.IO
 import Frontend.StaticAnalysis.ProgramInitializer (initializeProgram)
 import Frontend.SyntacticAnalysis.Parser (parseTokens)
-import Frontend.LexicalAnalysis.Scanner (scan,isSpaceToken)
+import Frontend.LexicalAnalysis.Scanner (scan, scanProcessed)
 import Options.Applicative
 import Text.Pretty.Simple (pPrint)
 import Args
@@ -35,23 +35,21 @@ prompt text = do
 
 file path = do
     content <- readFile path
-    case scan content of
-        (tokens, []) -> pPrint (initializeProgram $ parseTokens $ ridTokensWhitespace tokens)
-        (_, err) -> lexicalErrors err
+    case scanProcessed content of
+        tokens -> pPrint (initializeProgram $ parseTokens tokens)
+        -- (_, err) -> lexicalErrors err
 
 repl = do
         input <- prompt "Embers>"
-        case scan input of
-            (tokens, []) -> pPrint (initializeProgram $ parseTokens $ ridTokensWhitespace tokens)
-            (tokens, err) -> lexicalErrors err
+        case scanProcessed input of
+            tokens -> pPrint (initializeProgram $ parseTokens tokens)
+            -- (tokens, err) -> lexicalErrors err
         repl
 
 lexicalErrors :: [String] -> IO ()
 lexicalErrors errors = do
     print "Lexical Errors found."
     pPrint errors
-
-ridTokensWhitespace = filter (not.isSpaceToken)
 
 main :: IO ()
 main = do

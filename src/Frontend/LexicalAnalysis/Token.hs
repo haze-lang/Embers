@@ -32,7 +32,7 @@ data Literal
     | STRING String
     | UNIT deriving (Show,Eq)
 
-data Identifier = IDENTIFIER String | ResolvedName Int (NonEmpty String) deriving (Show,Eq)
+data Identifier = IDENTIFIER String | ResolvedName Int (NonEmpty String) deriving Eq
 
 data TokenType
     = TYPE | RECORD | IF | THEN | ELSE | SWITCH | DEFAULT    -- Keywords
@@ -49,12 +49,18 @@ type Column = Int
 type Line = Int
 type Filename = String
 
-data Metadata = Meta Column Line Filename deriving Show
-instance Eq Metadata where
-    (==) (Meta c l f) (Meta c2 l2 f2) = c == c2 && l == l2 && f == f2
+data Metadata = Meta Column Line Filename deriving Eq
 
 incCol (Meta c l f) = Meta (c + 1) l f
 decCol (Meta c l f) = Meta (c - 1) l f
 incLine (Meta c l f) = Meta 0 (l + 1) f
 
 data StrSource = Str String Metadata deriving Show
+
+instance Show Identifier where
+    show (IDENTIFIER s) = s
+    show (ResolvedName id (s:|_)) = s
+
+instance Show Metadata where
+    show (Meta c l []) = show l ++ ":" ++ show c
+    show (Meta c l f) = show f ++ ":" ++ show l ++ ":" ++ show c

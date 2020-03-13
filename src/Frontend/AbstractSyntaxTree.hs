@@ -17,21 +17,21 @@ You should have received a copy of the GNU General Public License
 along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
-module Frontend.SyntacticAnalysis.AbstractSyntaxTree where
+module Frontend.AbstractSyntaxTree where
 
 import Frontend.LexicalAnalysis.Token
 import Data.List.NonEmpty
 
-data Program = Program [ProgramElement] deriving (Show,Eq)
+newtype Program = Program [ProgramElement] deriving (Show,Eq)
 
 data ProgramElement
     = Ty Type
-    | Proc MappingType Symbol Block
-    | Func MappingType Symbol Expression
+    | Proc BoundParameters TypeExpression Symbol (NonEmpty Statement)
+    | Func BoundParameters TypeExpression Symbol Expression
     | ExpressionVar TypeExpression Symbol Expression
     deriving (Show,Eq)
 
-newtype Block = Block (NonEmpty Statement) deriving (Show,Eq)
+type BoundParameters = [(Parameter, TypeExpression)]
 
 data Statement
     = StmtExpr Expression
@@ -47,10 +47,6 @@ type RecordMember = (Symbol, Symbol)
 -- Product Type
 data ValueCons = ValCons Symbol [Symbol] deriving (Show,Eq)
 
-data MappingType = MappingType BoundParameters TypeExpression deriving (Show,Eq)
-
-newtype BoundParameters = BoundParams [(Parameter, TypeExpression)] deriving (Show,Eq)
-
 data Parameter = Param Symbol CallMode deriving (Show, Eq)
 
 data CallMode
@@ -64,9 +60,10 @@ data TypeExpression
     = TArrow TypeExpression TypeExpression
     | TProd (NonEmpty TypeExpression)
     | TSymb Symbol
-    deriving (Show,Eq)
+    | TApp Symbol [Symbol]
+    deriving Eq
 
-data Expression 
+data Expression
     = App Expression Expression
     | Switch Expression (NonEmpty (Expression, Expression)) Expression      -- TODO
     | Conditional Expression Expression Expression
@@ -76,8 +73,22 @@ data Expression
     | Lit Literal
     deriving (Show,Eq)
 
-data Symbol = Symb Identifier Metadata deriving (Show,Eq)
+data Symbol = Symb Identifier Metadata deriving Eq
 
 data LambdaExpression
-    = ProcLambda Symbol (NonEmpty Parameter) Block
+    = ProcLambda Symbol (NonEmpty Parameter) (NonEmpty Statement)
     | FuncLambda Symbol (NonEmpty Parameter) Expression deriving (Show,Eq)
+
+instance Show Symbol where
+    show (Symb id m) = show id ++ " at " ++ show m
+
+instance Show TypeExpression where
+    show (TArrow l r) = show l ++ " -> " ++ show r
+    show (TProd (x:|[])) = show x
+    show (TProd (x:|xs)) =  "(" ++ show x ++ f xs ++ ")"
+        where
+            f [] = ""
+            f (x:xs) = " X " ++ show x ++ f xs
+    show (TSymb (Symb (ResolvedName _ (s:|_)) _)) = s
+    show (TSymb (Symb (IDENTIFIER s) _)) = s
+    show (TApp s [ss]) = "TApp " ++ show s ++ " " ++ show ss

@@ -19,7 +19,7 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 
 -- This module is just a reimplementation of State monad.
 
-module Frontend.AbstractParser
+module CompilerUtilities.AbstractParser
 where
 
 import Control.Applicative
