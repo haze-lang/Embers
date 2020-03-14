@@ -38,16 +38,16 @@ data Statement
     | Assignment Symbol Expression deriving (Show,Eq)
 
 data Type
-    = Record Symbol Symbol (NonEmpty RecordMember)          -- Members' types must be a type name, not a type expression.
+    = Record Symbol ValueCons (NonEmpty RecordMember)          -- Members' types must be a type name, not a type expression.
     | SumType Symbol (NonEmpty ValueCons)
     deriving (Show,Eq)
 
 type RecordMember = (Symbol, Symbol)
 
 -- Product Type
-data ValueCons = ValCons Symbol [Symbol] deriving (Show,Eq)
+data ValueCons = ValCons Symbol BoundParameters deriving (Show,Eq)
 
-data Parameter = Param Symbol CallMode deriving (Show, Eq)
+data Parameter = Param Symbol CallMode deriving (Show,Eq)
 
 data CallMode
     = ByVal
@@ -87,8 +87,7 @@ instance Show TypeExpression where
     show (TProd (x:|[])) = show x
     show (TProd (x:|xs)) =  "(" ++ show x ++ f xs ++ ")"
         where
-            f [] = ""
-            f (x:xs) = " X " ++ show x ++ f xs
-    show (TSymb (Symb (ResolvedName _ (s:|_)) _)) = s
-    show (TSymb (Symb (IDENTIFIER s) _)) = s
+        f [] = ""
+        f (x:xs) = " X " ++ show x ++ f xs
+    show (TSymb (Symb s _)) = show s
     show (TApp s [ss]) = "TApp " ++ show s ++ " " ++ show ss

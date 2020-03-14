@@ -59,7 +59,7 @@ data StrSource = Str String Metadata deriving Show
 
 instance Show Identifier where
     show (IDENTIFIER s) = s
-    show (ResolvedName id (s:|_)) = s
+    show (ResolvedName id (s:|_)) = s ++ "<" ++ show id ++ ">"
 
 instance Show Metadata where
     show (Meta c l []) = show l ++ ":" ++ show c

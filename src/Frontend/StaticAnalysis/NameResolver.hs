@@ -17,9 +17,9 @@ You should have received a copy of the GNU General Public License
 along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
-module Frontend.StaticAnalysis.ProgramInitializer
+module Frontend.StaticAnalysis.NameResolver
 (
-    initializeProgram,
+    resolveNames,
 )
 where
 
@@ -44,17 +44,17 @@ import Frontend.AbstractSyntaxTree
 import Data.List.NonEmpty (NonEmpty((:|)), (<|), fromList, toList)
 import Data.Foldable (foldlM)
 
-initializeProgram :: (Program, Table) -> (Program, Table, [Error])
-initializeProgram (p, t) = case parse program (initInitializerState p t) of
-    Left (resultProgram, (_, _, t, err)) -> (resultProgram, t, err)
+resolveNames :: (Program, Table) -> (Program, Table)
+resolveNames (p, t) = case parse program (intState p t) of
+    Left (resultProgram, (_, _, t)) -> (resultProgram, t)
     Right a -> error "Initialization failed."
 
-program :: Initializer Program  
+program :: NameResolver Program  
 program = do
     elements <- many programElement
     return $ Program elements
 
-programElement :: Initializer ProgramElement
+programElement :: NameResolver ProgramElement
 programElement = do
     elem <- item
     case elem of
@@ -63,86 +63,84 @@ programElement = do
         Func {} -> function elem
         ExpressionVar {} -> expr elem
 
-procedure :: ProgramElement -> Initializer ProgramElement
+procedure :: ProgramElement -> NameResolver ProgramElement
 procedure (Proc paramType retType name body) = do
     pushScope name
     procType <- mappingType (paramType, retType)
     let (paramType, retType) = procType
     body <- block body
-    p <- return $ Proc paramType retType name body
+    let p = Proc paramType retType name body
     popScope p
     return p
 
-function :: ProgramElement -> Initializer ProgramElement
+function :: ProgramElement -> NameResolver ProgramElement
 function (Func paramType retType name body) = do
     pushScope name
     funcType <- mappingType (paramType, retType)
     let (paramType, retType) = funcType
     body <- expression body
-    f <- return $ Func paramType retType name body
+    let f = Func paramType retType name body
     popScope f
     return f
 
-_type :: Type -> Initializer ProgramElement
+_type :: Type -> NameResolver ProgramElement
 _type (SumType (Symb (ResolvedName typeId absName) m) cons) = do
     cons <- valConstructors (toList cons)
     sameCons <- isSameConsName (getRelative absName) cons
-    consIds <- return $ getIds cons
+    let consIds = getIds cons
     defineTypeEntry (Symb (ResolvedName typeId absName) m) sameCons consIds
     return $ Ty $ SumType (Symb (ResolvedName typeId absName) m) (fromList cons)
 
     where
-    getIds = foldl (\aux (ValCons cons _) -> aux ++ [getSymId cons]) []
+    getIds = fmap $ \(ValCons cons _) -> getSymId cons
     isSameConsName typeName [] = return False
-    isSameConsName typeName ((ValCons name _):cs) = 
+    isSameConsName typeName (ValCons name _:cs) = 
         if (typeName ++ "_C") == toStr name
         then return True
         else isSameConsName typeName cs
-    
-    valConstructors = foldlM (\aux (ValCons name memTypes) -> do
-        memTypes <- resolveNames memTypes
-        paramIds <- return $ getIds memTypes
+
+    valConstructors = foldlM (\aux (ValCons name params) -> do
+        params <- boundParams params
+        let paramIds = getParamIds params
         defineValCons name typeId paramIds
-        return $ aux ++ [ValCons name memTypes]) []
+        return $ aux ++ [ValCons name params]) []
 
-        where
-        getIds = foldl (\aux x -> aux ++ [getSymId x]) []
-        resolveNames = foldlM (\aux x -> resolveName x >>= \x -> return $ aux ++ [x]) []
-
-_type (Record typeName consName members) = do
-    let (Symb (ResolvedName consId absName) m) = consName
-    sameCons <- return $ (toStr typeName ++ "_C") == toStr consName
+_type (Record typeName cons members) = do
+    let (ValCons consName params) = cons
+    let consId = getSymId consName
+    let sameCons = (toStr typeName ++ "_C") == toStr consName
     members <- recordMembers (toList members)
-    memberIds <- return $ getMemberIds members
+    let memberIds = getMemberIds members
     defineRecordTypeEntry typeName sameCons consId memberIds
-    memberTypeIds <- return $ getMemberTypeIds members
     let (Symb (ResolvedName typeId _) _) = typeName
-    defineValCons consName typeId memberTypeIds
-    return $ Ty $ Record typeName consName (fromList members)
+    params <- boundParams params
+    let paramIds = getParamIds params
+    defineValCons consName typeId paramIds
+    cons <- return $ ValCons consName params
+    return $ Ty $ Record typeName cons (fromList members)
 
     where
-    getMemberIds = foldl (\aux (mName, mType) -> aux ++ [(getSymId mName, getSymId mType)]) []
-    getMemberTypeIds = foldl (\aux (_ ,mType) -> aux ++ [getSymId mType]) []
-    
+    getMemberIds = fmap $ \(member, _) -> getSymId member
+
     recordMembers = foldlM (\aux (name, memType) -> do
         memType <- resolveName memType
         updateVarType name (TSymb memType)
         return $ aux ++ [(name, memType)]) []
 
-expr :: ProgramElement -> Initializer ProgramElement
+expr :: ProgramElement -> NameResolver ProgramElement
 expr (ExpressionVar t name e) = do
     t <- typeExpression t
     e <- expression e
     return $ ExpressionVar t name e
 
-block :: (NonEmpty Statement) -> Initializer (NonEmpty Statement)
+block :: NonEmpty Statement -> NameResolver (NonEmpty Statement)
 block stmts = do
     stmts <- statements (toList stmts)
     return $ fromList stmts
     
     where statements = foldlM (\aux s -> statement s >>= \s -> return $ aux ++ [s]) []
 
-statement :: Statement -> Initializer Statement
+statement :: Statement -> NameResolver Statement
 statement (Assignment l r) = do
     setAssigned l   -- Every symbol on right side of assignment must have been defined before.
     r <- expression r
@@ -153,7 +151,7 @@ statement (StmtExpr e) = do
     e <- expression e
     return $ StmtExpr e
 
-expression :: Expression -> Initializer Expression
+expression :: Expression -> NameResolver Expression
 expression (Lit lit) = return $ Lit lit
 expression (Ident id) = do
     id <- resolveName id
@@ -206,24 +204,19 @@ expression (App l arg) = do
     arg <- expression arg
     return $ App l arg
 
-mappingType :: ([(Parameter, TypeExpression)], TypeExpression) -> Initializer ([(Parameter, TypeExpression)], TypeExpression)
+mappingType :: ([(Parameter, TypeExpression)], TypeExpression) -> NameResolver ([(Parameter, TypeExpression)], TypeExpression)
 mappingType (ps, retType) = do
     ps <- boundParams ps
     retType <- typeExpression retType
     return (ps, retType)
 
-boundParams :: [(Parameter, TypeExpression)] -> Initializer [(Parameter, TypeExpression)]
-boundParams ps = do
-    ps <- boundParams' ps
-    return ps
-    
-    where
-    boundParams' = foldlM (\aux ((Param name callMode), typeExpr) -> do
+boundParams :: [(Parameter, TypeExpression)] -> NameResolver [(Parameter, TypeExpression)]
+boundParams = foldlM (\aux (Param name callMode, typeExpr) -> do
         typeExpr <- typeExpression typeExpr
         updateVarType name typeExpr
-        return $ aux ++ [((Param name callMode), typeExpr)]) []
+        return $ aux ++ [(Param name callMode, typeExpr)]) []
 
-typeExpression :: TypeExpression -> Initializer TypeExpression
+typeExpression :: TypeExpression -> NameResolver TypeExpression
 typeExpression (TApp name args) = do
     name <- resolveTypeName name
     args <- typeArgs args
@@ -259,10 +252,10 @@ typeExpression (TProd ls) = do
     
     where typeExpressions = foldlM (\aux t -> typeExpression t >>= \t -> return $ aux ++ [t]) []
 
-item :: Initializer ProgramElement
-item = P $ (\(Program elements, s, t, e) -> case elements of
-    x:xs -> Left (x, (Program xs, s, t, e))
-    [] -> Right (Program [], s, t, e))
+item :: NameResolver ProgramElement
+item = P $ \(Program elements, s, t) -> case elements of
+    x:xs -> Left (x, (Program xs, s, t))
+    [] -> Right (Program [], s, t)
 
 -- Symbol Resolution
 
@@ -278,22 +271,23 @@ resolveTypeName name = do
         Just (Symb (ResolvedName id n) m) -> return $ Symb (ResolvedName id n) m
         Nothing -> error $ "Unresolved symbol: " ++ show name
 
-resolve :: Symbol -> Bool -> Initializer (Maybe Symbol)
-resolve (Symb (ResolvedName id absName) m) _ = return $ Just $ (Symb (ResolvedName id absName) m)
+resolve :: Symbol -> Bool -> NameResolver (Maybe Symbol)
+resolve (Symb (ResolvedName id absName) m) _ = return $ Just $ Symb (ResolvedName id absName) m
 resolve (Symb (IDENTIFIER name) m) isType = do
     s <- getState
-    let (_, (_, absName, assignedSym), (_, table), e) = s
+    let (_, (_, absName, assignedSym), (_, table)) = s
     resolve' name absName absName table assignedSym
 
     where
-    resolve' :: String -> AbsoluteName -> AbsoluteName -> SymTable -> Maybe Symbol -> Initializer (Maybe Symbol)
+    resolve' :: String -> AbsoluteName -> AbsoluteName -> SymTable -> Maybe Symbol -> NameResolver (Maybe Symbol)
     resolve' name absName originalTrace tableState assignedSym = do
         case nameLookup (makeAbs name absName) tableState of
             Just (id, entry) ->
                 if (id, entry) `isDefinedBefore` assignedSym
-                then case isType of
-                    True -> return $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
-                    False -> checkType entry id name absName
+                then
+                    if isType
+                    then return $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
+                    else checkType entry id name absName
                 else error $ "Use before definition: " ++ name ++ " " ++ show m
             Nothing -> case qualifyName absName of
                 Just absName -> resolve' name absName originalTrace tableState assignedSym
@@ -323,61 +317,58 @@ resolve (Symb (IDENTIFIER name) m) isType = do
     qualifyName (name :| trace) = Just $ Data.List.NonEmpty.fromList trace
 
 -- | Pushes scope into scope stack and defines the name.
-pushScope :: Symbol -> Initializer ()
+pushScope :: Symbol -> NameResolver ()
 pushScope (Symb (ResolvedName id name) _) = do
     s <- getState
-    let (inp, (scopeId, ns, assignedSym), table, err) = s
-    absName <- return $ (getRelative name) <| ns
-    setState (inp, (Scope id, absName, assignedSym), table, err)
+    let (inp, (scopeId, ns, assignedSym), table) = s
+    let absName = getRelative name <| ns
+    setState (inp, (Scope id, absName, assignedSym), table)
 
 getRelative (x:|_) = x
 
 -- | Update current ScopeState to parent scope of caller, and adds definition to table entry.
-popScope :: ProgramElement -> Initializer ()
+popScope :: ProgramElement -> NameResolver ()
 popScope elem = do
     s <- getState
-    let (inp, ((Scope scopeId), (n :| ns), assignedSym), table, err) = s
-    setState (inp, (Scope scopeId, fromList ns, assignedSym), table, err)
+    let (inp, (Scope scopeId, n :| ns, assignedSym), table) = s
+    setState (inp, (Scope scopeId, fromList ns, assignedSym), table)
     updateScopeId
-    s <- getState
-    let (_, (scope, _, _), _, _) = s
-    absName <- return $ n :| ns
-    updateEntry scopeId $ getEntry elem scope absName
+    scope <- getScope
+    updateEntry scopeId $ getEntry elem scope (n :| ns)
 
     where
     getEntry (Proc paramsTypes retType name _) parentScope absName = EntryProc name absName parentScope (Def (getParamIds paramsTypes, retType))
     getEntry (Func paramsTypes retType name _) parentScope absName = EntryFunc name absName parentScope (Def (getParamIds paramsTypes, retType))
-    getParamIds = foldr (\((Param s _), _) a -> (getSymId s):a) []
-    
+
     updateScopeId = do
         s <- getState
-        let (inp, ((Scope scopeId), ns, assignedSym), (nextId, table), err) = s
-        parentScope <- return $ case lookupTableEntry scopeId table of
-            Just (EntryProc _ _ parentScope _) -> parentScope
-            Just (EntryFunc _ _ parentScope _) -> parentScope
-            Just (EntryType _ _ parentScope _) -> parentScope
-            Just (EntryVar _ _ parentScope _) -> parentScope
-            Nothing -> Global
-        setState (inp, (parentScope, ns, assignedSym), (nextId, table), err)
+        let (inp, (Scope scopeId, ns, assignedSym), (nextId, table)) = s
+        let parentScope = case lookupTableEntry scopeId table of
+                Just (EntryProc _ _ parentScope _) -> parentScope
+                Just (EntryFunc _ _ parentScope _) -> parentScope
+                Just (EntryType _ _ parentScope _) -> parentScope
+                Just (EntryVar _ _ parentScope _) -> parentScope
+                Nothing -> Global
+        setState (inp, (parentScope, ns, assignedSym), (nextId, table))
 
 -- | Update current ScopeState to parent scope of caller. Only to be used for lambda expressions since their types are not determined yet.
 popScopeLambda = do
     s <- getState
-    let (inp, ((Scope scopeId), (n :| ns), assignedSym), table, err) = s
-    setState (inp, (Scope scopeId, fromList ns, assignedSym), table, err)
+    let (inp, (Scope scopeId, (n :| ns), assignedSym), table) = s
+    setState (inp, (Scope scopeId, fromList ns, assignedSym), table)
     updateScopeId
 
     where
     updateScopeId = do
         s <- getState
-        let (inp, ((Scope scopeId), ns, assignedSym), (nextId, table), err) = s
-        parentScope <- return $ case lookupTableEntry scopeId table of
-            Just (EntryProc _ _ parentScope _) -> parentScope
-            Just (EntryFunc _ _ parentScope _) -> parentScope
-            Just (EntryType _ _ parentScope _) -> parentScope
-            Just (EntryVar _ _ parentScope _) -> parentScope
-            Nothing -> Global
-        setState (inp, (parentScope, ns, assignedSym), (nextId, table), err)
+        let (inp, (Scope scopeId, ns, assignedSym), (nextId, table)) = s
+        let parentScope = case lookupTableEntry scopeId table of
+                Just (EntryProc _ _ parentScope _) -> parentScope
+                Just (EntryFunc _ _ parentScope _) -> parentScope
+                Just (EntryType _ _ parentScope _) -> parentScope
+                Just (EntryVar _ _ parentScope _) -> parentScope
+                Nothing -> Global
+        setState (inp, (parentScope, ns, assignedSym), (nextId, table))
 
 defineTypeEntry (Symb (ResolvedName typeId absName) m) sameNameCons consIds = do
     scope <- getScope
@@ -389,17 +380,16 @@ defineRecordTypeEntry (Symb (ResolvedName typeId absName) m) sameNameCons consId
 
 getScope = do
     s <- getState
-    let (_, (scope, _, _), _, _) = s
+    let (_, (scope, _, _), _) = s
     return scope
 
-defineValCons :: Symbol -> ID -> [ID] -> Initializer ()
+defineValCons :: Symbol -> ID -> [ID] -> NameResolver ()
 defineValCons (Symb (ResolvedName consId absName) m) typeId paramIds = do
-    s <- getState
-    let (_, (scope, _, _), _, _) = s
+    scope <- getScope
     updateEntry consId $ EntryValCons (Symb (ResolvedName consId absName) m) absName scope $ Def (typeId, paramIds)
 
-setAssigned s = P $ \(inp, (scopeId, absName, _), table, err) -> Left ((), (inp, (scopeId, absName, Just s), table, err))
-removeAssigned = P $ \(inp, (scopeId, absName, _), table, err) -> Left ((), (inp, (scopeId, absName, Nothing), table, err))
+setAssigned s = P $ \(inp, (scopeId, absName, _), table) -> Left ((), (inp, (scopeId, absName, Just s), table))
+removeAssigned = P $ \(inp, (scopeId, absName, _), table) -> Left ((), (inp, (scopeId, absName, Nothing), table))
 
 -- | Update a variable's type expression to have resolved symbols.
 updateVarType name varType = do
@@ -410,14 +400,13 @@ updateVarType name varType = do
 
 updateEntry id newEntry = do
     s <- getState
-    let (inp, scope, (nid, table), err) = s
+    let (inp, scope, (nid, table)) = s
     table <- case updateTableEntry id newEntry table of
             Just t -> return t
             Nothing -> empty
-    setState (inp, scope, (nid, table), err)
+    setState (inp, scope, (nid, table))
 
-addError :: String -> Initializer ()
-addError message = P $ (\(inp, s, table, err) -> Left ((), (inp, s, table, err ++ ["Error: " ++ message])))
+getParamIds = fmap $ \(Param s _, _) -> getSymId s
 
 toStr (Symb (IDENTIFIER x) _) = x
 toStr (Symb (ResolvedName _ (x:|_)) _) = x
@@ -425,11 +414,10 @@ toStr (Symb (ResolvedName _ (x:|_)) _) = x
 getSymId (Symb (ResolvedName id _) _) = id
 getSymId (Symb (IDENTIFIER x) _) = error x
 
-type Error = String
 type AssignedSymbol = Maybe Symbol
 type ScopeState = (Scope, AbsoluteName, AssignedSymbol)
-type State = (Program, ScopeState, Table, [Error])
-type Initializer a = AbsParser State a
+type State = (Program, ScopeState, Table)
+type NameResolver a = AbsParser State a
 
-initInitializerState :: Program -> Table -> State
-initInitializerState p t = (p, (Global, "Global" :| [], Nothing), t, [])
+intState :: Program -> Table -> State
+intState p t = (p, (Global, "Global" :| [], Nothing), t)

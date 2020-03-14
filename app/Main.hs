@@ -20,7 +20,7 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 module Main where
 
 import System.IO
-import Frontend.StaticAnalysis.ProgramInitializer (initializeProgram)
+import Frontend.StaticAnalysis.NameResolver (resolveNames)
 import Frontend.SyntacticAnalysis.Parser (parseTokens)
 import Frontend.LexicalAnalysis.Scanner (scan, scanProcessed)
 import Options.Applicative
@@ -36,13 +36,13 @@ prompt text = do
 file path = do
     content <- readFile path
     case scanProcessed content of
-        tokens -> pPrint (initializeProgram $ parseTokens tokens)
+        tokens -> pPrint (resolveNames $ parseTokens tokens)
         -- (_, err) -> lexicalErrors err
 
 repl = do
         input <- prompt "Embers>"
         case scanProcessed input of
-            tokens -> pPrint (initializeProgram $ parseTokens tokens)
+            tokens -> pPrint (resolveNames $ parseTokens tokens)
             -- (tokens, err) -> lexicalErrors err
         repl
 

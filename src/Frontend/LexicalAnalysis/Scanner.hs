@@ -35,9 +35,9 @@ scan inp = scanInit $ initState inp
 
 scanInit :: LexerState -> ([Token], [Error])
 scanInit src = case src of 
-    ((Str []  _), e) -> ([], e)
+    (Str []  _, e) -> ([], e)
     _ -> case parse (many wspace) src of
-        Left (ts, ((Str [] _), e)) -> (ts, e)
+        Left (ts, (Str [] _, e)) -> (ts, e)
         Left (ts, rest) -> combineTokens ts (scanUtil rest)
         Right _ -> scanUtil src
 
@@ -46,28 +46,28 @@ combineTokens tokens (tokens2, err) = (tokens++tokens2, err)
 
 scanUtil :: LexerState -> ([Token], [Error])
 scanUtil xs = case parse symbolsLiterals xs of
-    Left (t, ((Str [] _), e)) -> ([t], e)
+    Left (t, (Str [] _, e)) -> ([t], e)
     Left (t, rest) -> combineTokens [t] (scanInit rest)
 
     Right _ -> case parse ident xs of
-        Left (ident, ((Str [] _), err)) -> case parse keywords xs of
-            Left (keyword, ((Str [] _), err)) -> ([keyword], err)
+        Left (ident, (Str [] _, err)) -> case parse keywords xs of
+            Left (keyword, (Str [] _, err)) -> ([keyword], err)
             _ -> ([ident], err)
         Left (ident, rest) -> case parse keywords xs of
-            Left (keyword, ((Str [] _), err)) -> ([keyword], err)
+            Left (keyword, (Str [] _, err)) -> ([keyword], err)
             Left (keyword, rest2) -> if rest == rest2 
                 then combineTokens [keyword] (scanInit rest2)
                 else combineTokens [ident] (scanInit rest)
             Right _ -> combineTokens [ident] (scanInit rest)
-        Right ((Str _ m), err) -> combineTokens [(T (Invalid $ show err) m)] (scanInit (dropSourceError xs err)) -- Error
+        Right (Str _ m, err) -> combineTokens [T (Invalid $ show err) m] (scanInit (dropSourceError xs err)) -- Error
         where
             dropSourceError :: LexerState -> [Error] -> LexerState
             dropSourceError src err = case src of
-                ((Str [] m), err2) -> (Str [] m, err2++err)
-                ((Str (x:xs) m), err2) -> (Str xs (incCol m), err++err2)
+                (Str [] m, err2) -> (Str [] m, err2 ++ err)
+                (Str (x:xs) m, err2) -> (Str xs (incCol m), err ++ err2)
 
 initState :: String -> LexerState
-initState str = ((Str str (Meta 1 1 "")), [])
+initState str = (Str str (Meta 1 1 ""), [])
 
 keyword :: String -> TokenType -> Lexer Token
 keyword word t = do
@@ -229,7 +229,7 @@ line = do
     return (T (WHITESPACE Newline) m)
 
 failToken :: String -> Metadata -> Lexer Token
-failToken message m = P $ \(src, err) -> Left (T (Invalid message) m, (src, (err ++ [formMessage message m])))
+failToken message m = P $ \(src, err) -> Left (T (Invalid message) m, (src, err ++ [formMessage message m]))
     where formMessage str (Meta c l _) = "At line " ++ show l ++ ", cloumn " ++ show c ++ ": " ++ str
 
 type Error = String
@@ -247,11 +247,11 @@ isSpaceToken t = case t of
 
 item :: Lexer Char
 item = P $ \inp -> case inp of
-    ((Str [] m), err) -> Right inp
-    ((Str (x:xs) m), err) -> case x of
+    (Str [] m, err) -> Right inp
+    (Str (x:xs) m, err) -> case x of
         '\r' -> case xs of
             ('\n':bs) -> Left (x, (Str bs (incLine m), err))
-            _ -> Left ((x, (Str xs (incLine m), err)))
+            _ -> Left (x, (Str xs (incLine m), err))
         '\n' -> Left (x, (Str xs (incLine m), err))
         _ -> Left (x, (Str xs (incCol m), err))
 

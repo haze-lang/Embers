@@ -115,7 +115,7 @@ lookupTableEntry = M.lookup
 
 nameLookup :: AbsoluteName -> SymTable -> Maybe (ID, TableEntry)
 nameLookup name table = case M.toList $ M.filter (search name) table of
-    x:[] -> Just x
+    [x] -> Just x
     x:xs -> error $ "Multiple bindings found for " ++ show name ++ ": " ++ show xs   -- Error/Bug
     [] -> Nothing
 
@@ -130,10 +130,10 @@ nameLookup name table = case M.toList $ M.filter (search name) table of
 
 -- Standard Library Utilities
 
-boolId table = f "Bool" table
-unitId table = f "Unit" table
-stringId table = f "String" table
-intId table = f "Int" table
+boolId = f "Bool"
+unitId = f "Unit"
+stringId = f "String"
+intId = f "Int"
 
 f name table = case nameLookup (name:|["Global"]) table of
     Just (id, EntryType (Symb (IDENTIFIER name) m) absName _ _) -> Symb (ResolvedName id absName) m
@@ -150,8 +150,8 @@ data Definition a
     | Undefined deriving (Show,Eq)
 
 data TypeDef
-    = RecType VCons [(FieldVar, FieldType)]
-    | SType [VCons]
+    = RecType ValConsID [FieldID]
+    | SType [ValConsID]
     deriving (Show,Eq)
 
 type ID = Int
@@ -161,8 +161,8 @@ type Name = Symbol
 type ReturnType = TypeExpression
 type Param = Identifier
 type VarType = TypeExpression
-type VCons = ID
-type FieldVar = ID
+type ValConsID = ID
+type FieldID = ID
 type FieldType = ID
 type SameNameCons = Bool
 type TypeId = ID

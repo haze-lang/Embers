@@ -35,7 +35,7 @@ import CompilerUtilities.ProgramTable
 import CompilerUtilities.AbstractParser (AbsParser(P), getState, setState, parse)
 
 typeCheck :: Program -> Table -> (Program, Table, [Error])
-typeCheck p t = case parse program (initState p t) of
+typeCheck p t = case parse program $! initState p t of
     Left (p, (_, t, _, err)) -> (p, t, err)
 
 program = do
@@ -49,7 +49,7 @@ programElement = do
         Ty _ -> return elem
         Proc {} -> procedure elem
         Func {} -> function elem
-        -- ExpressionVar {} -> expr elem
+        -- ExpressionVar {} -> expr elem -- TODO
 
 procedure (Proc ps retType name stmts) = do
     let initStmts = NE.init stmts
@@ -143,7 +143,7 @@ expressionType (Conditional condition e1 e2) = do
 expressionType (App l r) = do
     tl <- expressionType l
     case tl of
-        TArrow _ _ -> return ()
+        TArrow {} -> return ()
         _ -> error "Application only allowed on arrow types."
     let (TArrow paramType retType) = tl
     tr <- expressionType r
@@ -166,10 +166,9 @@ assertStructural (TProd (x:|xs)) (TProd (y:|ys)) = do
     return $ r1 && r2
 
 assertStructural (TSymb l) (TSymb r) = return $ l `cmpSymb` r
-
 assertStructural _ _ = return False
 
-assertNominal (TProd ((TSymb source):|[])) target = source `cmpSymb` target
+assertNominal (TProd (TSymb source:|[])) target = source `cmpSymb` target
 assertNominal (TSymb source) target = source `cmpSymb` target
 
 isUnit te = assertNominal te . unitId <$> getTable
@@ -203,10 +202,9 @@ isTypeChecked id = do
             return False
 
 -- | Define a symbol's type.
-
 defineVarType (Symb (ResolvedName id absName) m) varType = do
     t <- getTable
-    entry <- return $ lookupTableEntry id t
+    let entry = lookupTableEntry id t
     let (Just (EntryVar name absName s Undefined)) = entry
     updateEntry id $ EntryVar name absName s (Def varType)
 
@@ -221,15 +219,9 @@ lookupType :: ID -> TypeChecker (Maybe TypeExpression)
 lookupType id = do
     t <- getTable
     case lookupTableEntry id t of
-        Nothing -> error "Unresolved symbol?"
         Just entry -> case entry of
             EntryProc _ _ _ (Def (pIds, ret)) -> arrowType pIds ret
             EntryFunc _ _ _ (Def (pIds, ret)) -> arrowType pIds ret
-            EntryType name _ _ _ -> do
-                addError $ show name
-                return $ Just $ TSymb name
-            -- EntryType {} -> error $ "Expected value, but " ++ show id ++ " is a type."
-
             EntryVar _ _ _ (Def t) -> return $ Just t
             EntryValCons _ _ _ (Def (retId, pIds)) -> do
                 let (Just retName) = getName retId t
@@ -237,7 +229,9 @@ lookupType id = do
                 case pIds of
                     [] -> return $ Just retType                 -- Nullary value constructor
                     _ -> arrowType pIds retType
+            EntryType {} -> error $ "Expected value, but " ++ show id ++ " is a type."
             _ -> return Nothing
+        Nothing -> error "Unresolved symbol?"
 
     where
     getName id table = do
@@ -246,8 +240,7 @@ lookupType id = do
             EntryType name _ _ _ -> return name
 
     arrowType pIds retType = do
-        paramTypes <- constructProductType pIds
-        let paramType = paramTypes
+        paramType <- constructProductType pIds
         return $ Just $ TArrow paramType retType
 
     constructProductType [x] = do

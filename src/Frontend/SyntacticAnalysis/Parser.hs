@@ -28,8 +28,9 @@ import CompilerUtilities.ProgramTable (
     updateTableEntry, insertTableEntry, lookupTableEntry, initializeTable, nameLookup)
 import CompilerUtilities.AbstractParser
 import Control.Applicative
-import Data.Char (isUpper, isLower)
 import Control.Monad (when)
+import Data.Foldable (foldlM)
+import Data.Char (isUpper, isLower)
 import Data.List.NonEmpty (NonEmpty((:|)), (<|), fromList, toList, reverse)
 import Data.Either (Either(Left, Right))
 import qualified Data.Map.Strict as M
@@ -37,11 +38,11 @@ import Frontend.LexicalAnalysis.Token
 import qualified Frontend.LexicalAnalysis.Scanner
 import Frontend.LexicalAnalysis.Token
 
--- |Parses the given token stream and returns syntax tree.
+-- | Parses the given token stream and returns syntax tree.
 parseTokens :: [Token] -> (Program, Table)
 parseTokens src = case parse program $ initParserState src of
     Left (p, ([], _, _, t, err)) -> (p, t)
-    Left (p, (_, _, _, t, err)) -> (p, t)
+    Left (p, (ts, _, _, t, err)) -> error $ "Parser did not consume input. Remaining: " ++ show ts
     Right _ -> error "Syntax error."
 
 program :: Parser Program
@@ -189,33 +190,6 @@ sigName = do
     token RPAREN
     return a
 
-bindParams (TArrow (TProd exprList) retType) params = do
-    params <- bParams exprList params
-    return (params, retType)
-
-    where
-    bParams :: NonEmpty TypeExpression -> NonEmpty Parameter -> Parser [(Parameter, TypeExpression)]
-    bParams (t:|[]) (p:|[]) = return [(p, t)]
-    bParams (t:|ts) (p:|ps) = case t of
-        TArrow _ _ ->
-            if length ts == 0 && length ps == 0
-            then return [(p, t)]
-            else error ""
-        TSymb _ -> handleProd (Data.List.NonEmpty.reverse (t:|ts)) (Data.List.NonEmpty.reverse (p:|ps)) []
-        TApp _ _ -> handleProd (Data.List.NonEmpty.reverse (t:|ts)) (Data.List.NonEmpty.reverse (p:|ps)) []
-        TProd prods ->
-            if length ps == 0
-            then handleProd (Data.List.NonEmpty.reverse prods) (Data.List.NonEmpty.reverse (p:|ps)) []
-            else error "Arrow Operator is binary and maps exactly one parameter."
-        
-        where
-        handleProd :: NonEmpty TypeExpression -> NonEmpty Parameter -> [(Parameter, TypeExpression)] -> Parser [(Parameter, TypeExpression)]
-        handleProd t (p:|[]) aux = return $ case t of
-            t:|[] -> (p, t):aux
-            _ -> (p, TProd $ Data.List.NonEmpty.reverse t):aux
-        handleProd (t:|[]) (p:|ps) aux = error "Arrow Operator is binary and maps exactly one parameter."
-        handleProd (t:|ts) (p:|ps) aux = handleProd (fromList ts) (fromList ps) ((p, t):aux)
-
 -- Types
 
 _type :: Parser Type
@@ -244,7 +218,8 @@ productType typeName = do
     cons <- handleSameCons cons typeName
     cons <- defineNameInParent cons Constructor
     operands <- consOperands
-    return $ ValCons cons operands
+    consParams <- defineVirtualParams operands
+    return $ ValCons cons consParams
     <|> do
     cons <- consIdent
     cons <- handleSameCons cons typeName
@@ -259,8 +234,8 @@ productType typeName = do
         return $ operand:operandList
         
         where
-        restOperands = token CROSS >>= const (typeIdent <|> typeParam)
-        
+        restOperands = token CROSS >> typeIdent <|> typeParam
+
         typeParam = do
             p <- typeParamIdent
             p <- resolveName p
@@ -276,19 +251,22 @@ recordType = do
     cons <- handleSameCons cons typeName
     cons <- defineNameInParent cons Constructor
     token $ WHITESPACE Newline
-    members <- some members
-    let (x:xs) = members
+    members <- some memberDeclaration
+    let memberTypes = getMemberTypes members
+    params <- defineVirtualParams memberTypes
     endScope
-    return $ Record typeName cons (x :| xs)
+    return $ Record typeName (ValCons cons params) (fromList members)
 
     where
-    members = do
+    getMemberTypes = map snd
+
+    memberDeclaration = do
         member <- ident
         token COLON
-        memberType <- ident
+        memberType <- typeIdent
         terminator
         member <- defineName member (ExprVal $ Just $ TSymb memberType)
-        return $ (member, memberType)
+        return (member, memberType)
 
 -- Expressions
 
@@ -354,16 +332,17 @@ switchExpr = do
     token ARROW
     def <- expression
     case cases of
-        (x:xs) -> return (Switch (switch) (x :| xs) def)
+        (x:xs) -> return (Switch switch (x :| xs) def)
         [] -> empty
+
     where
-        _case :: Parser (Expression, Expression)
-        _case = do
-            p <- pattern
-            token ARROW
-            e <- expression
-            terminator
-            return (p, e)
+    _case :: Parser (Expression, Expression)
+    _case = do
+        p <- pattern
+        token ARROW
+        e <- expression
+        terminator
+        return (p, e)
 
 lambdaExpr :: Parser Expression
 lambdaExpr = procLambdaExpr <|> funcLambdaExpr
@@ -408,18 +387,19 @@ identifier = do
     return $ Ident name
 
 pattern :: Parser Expression
-pattern = literal
-        <|> tuple
+pattern = literal <|> tuple
 
 -- State
 
 type LambdaNo = Int
+type VParamNo = Int
+type MiscState = (LambdaNo, VParamNo)
 type ErrorState = [String]
 type ScopeState = (Scope, AbsoluteName)
-type ParserState = ([Token], ScopeState, LambdaNo, Table, ErrorState)
+type ParserState = ([Token], ScopeState, MiscState, Table, ErrorState)
 
 initParserState :: [Token] -> ParserState
-initParserState tokens = (tokens, (Global, "Global" :| []), 0, initializeTable, [])
+initParserState tokens = (tokens, (Global, "Global" :| []), (0, 0), initializeTable, [])
 
 type Parser a = AbsParser ParserState a
 
@@ -447,10 +427,10 @@ terminator = token SEMICOLON <|> token (WHITESPACE Newline)
 
 sat :: (TokenType -> Bool) -> Parser Token
 sat p = do
-        (T x m) <- item
-        if p x
-        then return (T x m)
-        else empty
+    (T x m) <- item
+    if p x
+    then return (T x m)
+    else empty
 
 ident :: Parser Symbol
 ident = do
@@ -501,10 +481,48 @@ wspace = do
 token :: TokenType -> Parser Token
 token x = sat (== x)
 
+bindParams (TArrow (TProd exprList) retType) params = do
+    params <- bParams exprList params
+    return (params, retType)
+
+    where
+    bParams :: NonEmpty TypeExpression -> NonEmpty Parameter -> Parser [(Parameter, TypeExpression)]
+    bParams (t:|[]) (p:|[]) = return [(p, t)]
+    bParams (t:|ts) (p:|ps) = case t of
+        TArrow _ _ ->
+            if length ts == 0 && length ps == 0
+            then return [(p, t)]
+            else error ""
+        TSymb _ -> handleProd (Data.List.NonEmpty.reverse (t:|ts)) (Data.List.NonEmpty.reverse (p:|ps)) []
+        TApp _ _ -> handleProd (Data.List.NonEmpty.reverse (t:|ts)) (Data.List.NonEmpty.reverse (p:|ps)) []
+        TProd prods ->
+            if length ps == 0
+            then handleProd (Data.List.NonEmpty.reverse prods) (Data.List.NonEmpty.reverse (p:|ps)) []
+            else error "Arrow Operator is binary and maps exactly one parameter."
+        
+        where
+        handleProd :: NonEmpty TypeExpression -> NonEmpty Parameter -> [(Parameter, TypeExpression)] -> Parser [(Parameter, TypeExpression)]
+        handleProd t (p:|[]) aux = return $ case t of
+            t:|[] -> (p, t):aux
+            _ -> (p, TProd $ Data.List.NonEmpty.reverse t):aux
+        handleProd (t:|[]) (p:|ps) aux = error "Arrow Operator is binary and maps exactly one parameter."
+        handleProd (t:|ts) (p:|ps) aux = handleProd (fromList ts) (fromList ps) ((p, t):aux)
+
+defineVirtualParams = foldlM (\aux x -> do
+        (p, t) <- defineConsParam x
+        p <- return $ Param p ByVal
+        return $ aux ++ [(p, TSymb t)]) []
+
+        where
+        defineConsParam typeName = do
+            p <- getNextVirtualParam
+            p <- defineName p $ ExprVal $ Just $ TSymb typeName
+            return (p, typeName)
+
 -- Errors
 
 addError :: String -> Parser ()
-addError message = P $ (\(inp, scope, lambdaNo, table, err) -> Left ((), (inp, scope, lambdaNo, table, err ++ ["Error: " ++ message])))
+addError message = P $ \(inp, scope, lambdaNo, table, err) -> Left ((), (inp, scope, lambdaNo, table, ("Parse Error: " ++ message):err))
 
 -- Scope
 
@@ -534,19 +552,13 @@ resolve (Symb (IDENTIFIER name) m) = do
         qualifyName (name :| trace) = Just $ Data.List.NonEmpty.fromList trace
 
 defineParameters ps = do
-    ps <- defineParams ps []
-    return $ ps
+    ps <- defineParams ps
+    return ps
 
     where
-    defineParams [] aux = return aux
-    defineParams ((p, t):ps) aux = do
-        p <- defineParam (p, t)
-        defineParams ps (aux ++ [(p, t)])
-
-        where
-        defineParam ((Param p c), t) = do
-            p <- defineName p (ExprVal $ Just t)
-            return $ Param p c
+    defineParams = foldlM (\aux (Param name c, t) -> do
+        p <- defineName name $ ExprVal $ Just t
+        return $ aux ++ [((Param p c), t)]) []
 
 -- | Defines a name without beginning an attached scope.
 defineName name elem = do
@@ -579,7 +591,8 @@ pushScopeLambda :: CurrentElement -> Parser Symbol
 pushScopeLambda elem = do
     lambdaNo <- consumeLambdaNo
     beginScope (Symb (IDENTIFIER $ "_L" ++ show lambdaNo) (Meta 0 0 "")) elem
-    where consumeLambdaNo = P $ (\(inp, scope, lambdaNo, table, err) -> Left (lambdaNo, (inp, scope, lambdaNo + 1, table, err)))
+    
+    where consumeLambdaNo = P $ \(inp, scope, (lambdaNo, vp), table, err) -> Left (lambdaNo, (inp, scope, (lambdaNo + 1, vp), table, err))
 
 -- | Pops current scope, updating scope state to point to parent scope.
 endScope :: Parser ()
@@ -588,17 +601,25 @@ endScope = do
     let (inp, (scopeId, (n :| ns)), lambdaNo, table, err) = s
     setState (inp, (scopeId, fromList ns), lambdaNo, table, err)
     updateScopeId
-    where updateScopeId = do
-            s <- getState
-            let (inp, ((Scope scopeId), ns), lambdaNo, (nextId, table), err) = s
-            parentScope <- return $ case lookupTableEntry scopeId table of
-                Just (EntryProc _ _ parentScope _) -> parentScope
-                Just (EntryFunc _ _ parentScope _) -> parentScope
-                Just (EntryValCons _ _ parentScope _) -> parentScope
-                Just (EntryType _ _ parentScope _) -> parentScope
-                Just (EntryVar _ _ parentScope _) -> parentScope
-                Nothing -> Global
-            setState (inp, (parentScope, ns), lambdaNo, (nextId, table), err)
+    
+    where
+    updateScopeId = do
+        s <- getState
+        let (inp, ((Scope scopeId), ns), lambdaNo, (nextId, table), err) = s
+        parentScope <- return $ case lookupTableEntry scopeId table of
+            Just (EntryProc _ _ parentScope _) -> parentScope
+            Just (EntryFunc _ _ parentScope _) -> parentScope
+            Just (EntryValCons _ _ parentScope _) -> parentScope
+            Just (EntryType _ _ parentScope _) -> parentScope
+            Just (EntryVar _ _ parentScope _) -> parentScope
+            Nothing -> Global
+        setState (inp, (parentScope, ns), lambdaNo, (nextId, table), err)
+
+getNextVirtualParam = do
+    vpNo <- consumeVirtualParam
+    return (Symb (IDENTIFIER ("_p" ++ show vpNo)) (Meta 0 0 ""))
+
+    where consumeVirtualParam = P $ \(inp, scope, (lNo, vpNo), table, err) -> Left (vpNo, (inp, scope, (lNo, vpNo + 1), table, err))
 
 defineNameInParent (Symb (IDENTIFIER name) m) elem = do
     s <- getState
