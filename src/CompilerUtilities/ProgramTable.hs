@@ -18,21 +18,29 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
 module CompilerUtilities.ProgramTable
+(
+    TableEntry (..),
+    Scope (..),
+    TableState, ID, AbsoluteName, Table, TypeDef(..),
+    initializeTable, insertTableEntry, updateTableEntry, lookupTableEntry, nameLookup,
+    boolId, unitId, stringId, intId,
+    getRelative
+)
 where
 
 import Data.Map.Strict (Map)
 import Frontend.AbstractSyntaxTree
-import CompilerUtilities.AbstractParser
-import Data.List.NonEmpty (NonEmpty((:|)), (<|))
 import qualified Data.Map.Strict as M
 import Frontend.LexicalAnalysis.Token
+import CompilerUtilities.AbstractParser
+import Data.List.NonEmpty (NonEmpty((:|)), (<|), head)
 
-initializeTable :: Table
+initializeTable :: TableState
 initializeTable = case parse stdLib (0, M.fromList []) of
     Left (_, state) -> state
 
-type Table = (NextID, SymTable)
-type SymTable = M.Map ID TableEntry
+type TableState = (NextID, Table)
+type Table = M.Map ID TableEntry
 
 data TableEntry
     = EntryProc Name AbsoluteName Scope (Definition ([ParamId], ReturnType))
@@ -55,33 +63,33 @@ stdLib = do
 insertUnit = do
     typeId <- insertTypeEntry (getSymb "Unit") [] True
     consId <- insertValConsEntry (getSymb "Unit_C") (typeId, [])
-    updateTableEntry' typeId (EntryType (getSymb "Unit") (getAbs $ getSymb "Unit") Global (Def (True, SType [consId])))
+    updateTableEntry' typeId (EntryType (getSymb "Unit") (getAbs $ getSymb "Unit") Global (Just (True, SType [consId])))
 
 insertBool = do
     typeId <- insertTypeEntry (getSymb "Bool") [] False
     consId1 <- insertValConsEntry (getSymb "True") (typeId, [])
     consId2 <- insertValConsEntry (getSymb "False") (typeId, [])
-    updateTableEntry' typeId (EntryType (getSymb "Bool") (getAbs $ getSymb "Bool") Global (Def (False, SType [consId1, consId2])))
+    updateTableEntry' typeId (EntryType (getSymb "Bool") (getAbs $ getSymb "Bool") Global (Just (False, SType [consId1, consId2])))
 
 insertChar = insertTypeEntry (getSymb "Char") [] False
 insertString = insertTypeEntry (getSymb "String") [] False
 insertInt = insertTypeEntry (getSymb "Int") [] False
 
-insertTypeEntry name constructors sameNameCons = insertTableEntry' $ EntryType name (getAbs name) Global (Def (sameNameCons, SType []))
+insertTypeEntry name constructors sameNameCons = insertTableEntry' $ EntryType name (getAbs name) Global (Just (sameNameCons, SType []))
 
-insertVarEntry name varType = insertTableEntry' $ EntryVar name (getAbs name) Global (Def varType)
+insertVarEntry name varType = insertTableEntry' $ EntryVar name (getAbs name) Global (Just varType)
 
-insertValConsEntry name varType = insertTableEntry' $ EntryValCons name (getAbs name) Global (Def varType)
+insertValConsEntry name varType = insertTableEntry' $ EntryValCons name (getAbs name) Global (Just varType)
 
 getAbs (Symb (IDENTIFIER n) _) = n :| ["Global"]
 
 getSymb name = Symb (IDENTIFIER name) (Meta 0 0 "StandardLibrary.hz")
 
-getResolvedSymb id name = Symb (ResolvedName id (name:|["Global"])) (Meta 0 0 "StandardLibrary.hz")
+-- getResolvedSymb id name = Symb (ResolvedName id (name:|["Global"])) (Meta 0 0 "StandardLibrary.hz")
 
 -- Table Manipulation
 
-type TableManipulator a = AbsParser Table a
+type TableManipulator a = AbsParser TableState a
 
 insertTableEntry' :: TableEntry -> TableManipulator ID
 insertTableEntry' entry = P (\(id, table) ->
@@ -98,22 +106,22 @@ updateTableEntry' id newEntry = P (\(id', table) ->
 -- Table Utilities
 
 -- | Only inserts a value if key does not already exist.
-insertTableEntry :: ID -> TableEntry -> SymTable -> Maybe SymTable
+insertTableEntry :: ID -> TableEntry -> Table -> Maybe Table
 insertTableEntry id row table = case M.lookup id table of
     Nothing -> Just $ M.insert id row table
     Just a -> Nothing
 
 -- | Only updates the value if key exists.
-updateTableEntry :: ID -> TableEntry -> SymTable -> Maybe SymTable
+updateTableEntry :: ID -> TableEntry -> Table -> Maybe Table
 updateTableEntry id newEntry table = case M.lookup id table of
     Just a -> Just $ M.insert id newEntry table -- Replaces old entry with new entry
     Nothing -> Nothing
 
 -- | Synonym for Map.lookup
-lookupTableEntry :: ID -> SymTable -> Maybe TableEntry
+lookupTableEntry :: ID -> Table -> Maybe TableEntry
 lookupTableEntry = M.lookup
 
-nameLookup :: AbsoluteName -> SymTable -> Maybe (ID, TableEntry)
+nameLookup :: AbsoluteName -> Table -> Maybe (ID, TableEntry)
 nameLookup name table = case M.toList $ M.filter (search name) table of
     [x] -> Just x
     x:xs -> error $ "Multiple bindings found for " ++ show name ++ ": " ++ show xs   -- Error/Bug
@@ -145,9 +153,7 @@ data Scope
     = Scope ID
     | Global deriving (Eq,Show)
 
-data Definition a
-    = Def a
-    | Undefined deriving (Show,Eq)
+type Definition a = Maybe a
 
 data TypeDef
     = RecType ValConsID [FieldID]
@@ -163,7 +169,10 @@ type Param = Identifier
 type VarType = TypeExpression
 type ValConsID = ID
 type FieldID = ID
-type FieldType = ID
 type SameNameCons = Bool
 type TypeId = ID
 type ParamId = ID
+
+-- Type Aliases Utilities
+
+getRelative = Data.List.NonEmpty.head

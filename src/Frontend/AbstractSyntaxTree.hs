@@ -65,7 +65,7 @@ data TypeExpression
 
 data Expression
     = App Expression Expression
-    | Switch Expression (NonEmpty (Expression, Expression)) Expression      -- TODO
+    | Switch Expression (NonEmpty (Expression, Expression)) Expression
     | Conditional Expression Expression Expression
     | Lambda LambdaExpression
     | Tuple (NonEmpty Expression)
@@ -77,7 +77,18 @@ data Symbol = Symb Identifier Metadata deriving Eq
 
 data LambdaExpression
     = ProcLambda Symbol (NonEmpty Parameter) (NonEmpty Statement)
-    | FuncLambda Symbol (NonEmpty Parameter) Expression deriving (Show,Eq)
+    | FuncLambda Symbol (NonEmpty Parameter) Expression
+    deriving (Show,Eq)
+
+-- Utilities
+
+symStr (Symb (IDENTIFIER x) _) = x
+symStr (Symb (ResolvedName _ (x:|_)) _) = x
+
+symId (Symb (ResolvedName id _) _) = id
+symId (Symb (IDENTIFIER x) _) = error x
+
+symTrace (Symb (ResolvedName _ scopeTrace) _) = scopeTrace
 
 instance Show Symbol where
     show (Symb id m) = show id ++ " at " ++ show m

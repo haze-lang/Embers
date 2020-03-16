@@ -23,28 +23,24 @@ module Frontend.StaticAnalysis.NameResolver
 )
 where
 
-import Control.Applicative (many, empty, (<|>))
+import Control.Monad (when)
+import Control.Applicative (many)
 import CompilerUtilities.AbstractParser
 import Frontend.LexicalAnalysis.Token
 import qualified Data.Char (isUpper)
 import qualified Data.Map.Strict as M
 import CompilerUtilities.ProgramTable (
-    ID,
-    Scope,
-    Table,
-    SymTable,
-    AbsoluteName,
+    ID, Scope, TableState, Table, AbsoluteName,
     TableEntry(EntryProc, EntryFunc, EntryValCons, EntryType, EntryVar, EntryTypeCons),
-    Definition(Def),
     TypeDef(SType, RecType),
     Scope(Scope, Global),
-    updateTableEntry, lookupTableEntry, nameLookup)
+    updateTableEntry, lookupTableEntry, nameLookup, getRelative)
 import qualified Frontend.SyntacticAnalysis.Parser as P
 import Frontend.AbstractSyntaxTree
 import Data.List.NonEmpty (NonEmpty((:|)), (<|), fromList, toList)
 import Data.Foldable (foldlM)
 
-resolveNames :: (Program, Table) -> (Program, Table)
+resolveNames :: (Program, TableState) -> (Program, TableState)
 resolveNames (p, t) = case parse program (intState p t) of
     Left (resultProgram, (_, _, t)) -> (resultProgram, t)
     Right a -> error "Initialization failed."
@@ -56,7 +52,7 @@ program = do
 
 programElement :: NameResolver ProgramElement
 programElement = do
-    elem <- item
+    elem <- next
     case elem of
         Ty t -> _type t
         Proc {} -> procedure elem
@@ -92,10 +88,10 @@ _type (SumType (Symb (ResolvedName typeId absName) m) cons) = do
     return $ Ty $ SumType (Symb (ResolvedName typeId absName) m) (fromList cons)
 
     where
-    getIds = fmap $ \(ValCons cons _) -> getSymId cons
+    getIds = getSIds $ \(ValCons cons _) -> cons
     isSameConsName typeName [] = return False
     isSameConsName typeName (ValCons name _:cs) = 
-        if (typeName ++ "_C") == toStr name
+        if (typeName ++ "_C") == symStr name
         then return True
         else isSameConsName typeName cs
 
@@ -107,8 +103,8 @@ _type (SumType (Symb (ResolvedName typeId absName) m) cons) = do
 
 _type (Record typeName cons members) = do
     let (ValCons consName params) = cons
-    let consId = getSymId consName
-    let sameCons = (toStr typeName ++ "_C") == toStr consName
+    let consId = symId consName
+    let sameCons = (symStr typeName ++ "_C") == symStr consName
     members <- recordMembers (toList members)
     let memberIds = getMemberIds members
     defineRecordTypeEntry typeName sameCons consId memberIds
@@ -120,7 +116,7 @@ _type (Record typeName cons members) = do
     return $ Ty $ Record typeName cons (fromList members)
 
     where
-    getMemberIds = fmap $ \(member, _) -> getSymId member
+    getMemberIds =  getSIds fst
 
     recordMembers = foldlM (\aux (name, memType) -> do
         memType <- resolveName memType
@@ -195,6 +191,7 @@ expression (Lambda (FuncLambda name params body)) = do
     setAssigned name
     pushScope name
     body <- expression body
+    checkLocals body $ symId name
     popScopeLambda
     removeAssigned
     return $ Lambda $ FuncLambda name params body
@@ -203,6 +200,34 @@ expression (App l arg) = do
     l <- expression l
     arg <- expression arg
     return $ App l arg
+
+-- | Ensure that all variables referenced inside pure lambda expressions are defined inside the lambda.
+checkLocals e lambdaId = case e of
+    Switch e cases defaultExpr -> do
+        checkLocals e lambdaId
+        f $ toList cases
+        checkLocals defaultExpr lambdaId
+    Tuple (x:|[]) -> checkLocals x lambdaId
+    Tuple (x:|xs) -> checkLocals x lambdaId >> checkLocals (Tuple $ fromList xs) lambdaId
+    Conditional e1 e2 e3 -> checkLocals e1 lambdaId >> checkLocals e2 lambdaId >> checkLocals e3 lambdaId
+    App l r -> checkLocals l lambdaId >> checkLocals r lambdaId
+    Lit _ -> return ()
+    Lambda _ -> return ()   -- Lambda expressions will be checked on their own turn.
+    Ident name -> do
+        s <- getState
+        let (_, _, (_, table)) = s
+        let symbol = lookupTableEntry (symId name) table
+        maybe (error $ "Unresolved symbol: " ++ show name) g symbol
+    
+    where
+    g (EntryVar _ _ (Scope varParentId) _) = when (lambdaId /= varParentId) $ error "Functions cannot refer to outside variables."
+    g _ = return ()
+
+    f [] = return ()
+    f ((e1, e2):xs) = do
+        checkLocals e1 lambdaId
+        checkLocals e2 lambdaId
+        f xs
 
 mappingType :: ([(Parameter, TypeExpression)], TypeExpression) -> NameResolver ([(Parameter, TypeExpression)], TypeExpression)
 mappingType (ps, retType) = do
@@ -230,16 +255,16 @@ typeExpression (TApp name args) = do
             else return arg
         return $ aux ++ [arg]) []
         
-        where isTypeName name = Data.Char.isUpper (head $ toStr name)
+        where isTypeName name = Data.Char.isUpper (head $ symStr name)
 
-typeExpression (TSymb name) = do
+typeExpression (TSymb name) =
     if isTypeName name
     then do
         name <- resolveTypeName name
         return $ TSymb name
-    else return $ TSymb name    -- Type parameters will not be resolved here.
+    else return $ TSymb name    -- Type parameters do not need to be resolved.
     
-    where isTypeName name = Data.Char.isUpper (head $ toStr name)
+    where isTypeName name = Data.Char.isUpper (head $ symStr name)
 
 typeExpression (TArrow l r) = do
     l <- typeExpression l
@@ -247,13 +272,12 @@ typeExpression (TArrow l r) = do
     return $ TArrow l r
 typeExpression (TProd ls) = do
     ls <- typeExpressions (toList ls)
-    ls <- return $ fromList ls
-    return $ TProd ls
+    return $ TProd (fromList ls)
     
     where typeExpressions = foldlM (\aux t -> typeExpression t >>= \t -> return $ aux ++ [t]) []
 
-item :: NameResolver ProgramElement
-item = P $ \(Program elements, s, t) -> case elements of
+next :: NameResolver ProgramElement
+next = P $ \(Program elements, s, t) -> case elements of
     x:xs -> Left (x, (Program xs, s, t))
     [] -> Right (Program [], s, t)
 
@@ -279,52 +303,54 @@ resolve (Symb (IDENTIFIER name) m) isType = do
     resolve' name absName absName table assignedSym
 
     where
-    resolve' :: String -> AbsoluteName -> AbsoluteName -> SymTable -> Maybe Symbol -> NameResolver (Maybe Symbol)
-    resolve' name absName originalTrace tableState assignedSym = do
-        case nameLookup (makeAbs name absName) tableState of
-            Just (id, entry) ->
-                if (id, entry) `isDefinedBefore` assignedSym
-                then
-                    if isType
-                    then return $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
-                    else checkType entry id name absName
-                else error $ "Use before definition: " ++ name ++ " " ++ show m
-            Nothing -> case qualifyName absName of
-                Just absName -> resolve' name absName originalTrace tableState assignedSym
-                Nothing -> return Nothing                                                   -- Error: Undefined Ref
+    resolve' :: String -> AbsoluteName -> AbsoluteName -> Table -> Maybe Symbol -> NameResolver (Maybe Symbol)
+    resolve' name scopeTrace originalTrace table assignedSym = do
+        let lookupResult = nameLookup (makeAbs name scopeTrace) table
+        maybe findInParentScope processEntry lookupResult
 
         where
-        checkType entry id name absName = do
-            case entry of
-                EntryType _ _ _ (Def (True, _)) -> resolve (Symb (IDENTIFIER $ name ++ "_C") m) False
-                _ -> return $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
+        processEntry (id, entry) =
+            if (id, entry) `isDefinedBefore` assignedSym
+            then
+                if isType
+                then return $ Just $ Symb (ResolvedName id (makeAbs name scopeTrace)) m
+                else checkType entry id name scopeTrace
+            else error $ "Use before definition: " ++ name ++ " " ++ show m
         
-        -- Axiom: IDs of symbols in value definitions/bindings are in order of their appearence in syntax.
-        isDefinedBefore :: (ID, TableEntry) -> Maybe Symbol -> Bool     -- Does the use preceed definition?
-        isDefinedBefore _ Nothing = True
-        isDefinedBefore (rId, entry) (Just (Symb (ResolvedName lId (_:|sTrace)) _)) = not $ (getAbs entry) == sTrace && rId > lId
+        findInParentScope = maybe (return Nothing) (\absName -> resolve' name absName originalTrace table assignedSym) (dequalifyName scopeTrace)
 
-            where
-            getAbs entry = case entry of
-                EntryProc _ (_:|entryName) _ _ -> entryName
-                EntryFunc _ (_:|entryName) _ _ -> entryName
-                EntryType _ (_:|entryName) _ _ -> entryName
-                EntryVar _ (_:|entryName) _ _ -> entryName
-                EntryValCons _ (_:|entryName) _ _ -> entryName
+    -- Are we looking for a data constructor and found a type constructor with the same name?
+    checkType (EntryType _ _ _ (Just (True, _))) id name absName = resolve (Symb (IDENTIFIER $ name ++ "_C") m) False
+    checkType _                                  id name absName = return $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
+
+    -- Axiom: IDs of symbols in value definitions/bindings are in order of their appearence in syntax.
+    -- TODO: Flags every assignment instead of first assignment.
+    -- Sample Code:
+    --  1. a = a + 1 -- Flags correctly since a is defined here.
+    --  2. a = a + 1 -- Flags incorrectly since a is defined above.
+    isDefinedBefore :: (ID, TableEntry) -> Maybe Symbol -> Bool     -- Does the use preceed definition?
+    isDefinedBefore _ Nothing = True
+    isDefinedBefore (rId, entry) (Just (Symb (ResolvedName lId (_:|sTrace)) _)) = getAbs entry /= sTrace || (rId < lId)
+
+        where
+        getAbs entry = case entry of
+            EntryProc _ (_:|entryName) _ _ -> entryName
+            EntryFunc _ (_:|entryName) _ _ -> entryName
+            EntryType _ (_:|entryName) _ _ -> entryName
+            EntryVar _ (_:|entryName) _ _ -> entryName
+            EntryValCons _ (_:|entryName) _ _ -> entryName
 
     makeAbs = (<|)
-    qualifyName (_ :| []) = Nothing
-    qualifyName (name :| trace) = Just $ Data.List.NonEmpty.fromList trace
+    dequalifyName (_ :| []) = Nothing
+    dequalifyName (_ :| trace) = Just $ fromList trace
 
--- | Pushes scope into scope stack and defines the name.
+-- | Pushes scope into scope stack.
 pushScope :: Symbol -> NameResolver ()
 pushScope (Symb (ResolvedName id name) _) = do
     s <- getState
     let (inp, (scopeId, ns, assignedSym), table) = s
     let absName = getRelative name <| ns
     setState (inp, (Scope id, absName, assignedSym), table)
-
-getRelative (x:|_) = x
 
 -- | Update current ScopeState to parent scope of caller, and adds definition to table entry.
 popScope :: ProgramElement -> NameResolver ()
@@ -337,56 +363,43 @@ popScope elem = do
     updateEntry scopeId $ getEntry elem scope (n :| ns)
 
     where
-    getEntry (Proc paramsTypes retType name _) parentScope absName = EntryProc name absName parentScope (Def (getParamIds paramsTypes, retType))
-    getEntry (Func paramsTypes retType name _) parentScope absName = EntryFunc name absName parentScope (Def (getParamIds paramsTypes, retType))
-
-    updateScopeId = do
-        s <- getState
-        let (inp, (Scope scopeId, ns, assignedSym), (nextId, table)) = s
-        let parentScope = case lookupTableEntry scopeId table of
-                Just (EntryProc _ _ parentScope _) -> parentScope
-                Just (EntryFunc _ _ parentScope _) -> parentScope
-                Just (EntryType _ _ parentScope _) -> parentScope
-                Just (EntryVar _ _ parentScope _) -> parentScope
-                Nothing -> Global
-        setState (inp, (parentScope, ns, assignedSym), (nextId, table))
+    getEntry (Proc paramsTypes retType name _) parentScope absName = EntryProc name absName parentScope (Just (getParamIds paramsTypes, retType))
+    getEntry (Func paramsTypes retType name _) parentScope absName = EntryFunc name absName parentScope (Just (getParamIds paramsTypes, retType))
 
 -- | Update current ScopeState to parent scope of caller. Only to be used for lambda expressions since their types are not determined yet.
 popScopeLambda = do
     s <- getState
-    let (inp, (Scope scopeId, (n :| ns), assignedSym), table) = s
+    let (inp, (Scope scopeId, n :| ns, assignedSym), table) = s
     setState (inp, (Scope scopeId, fromList ns, assignedSym), table)
     updateScopeId
 
-    where
-    updateScopeId = do
-        s <- getState
-        let (inp, (Scope scopeId, ns, assignedSym), (nextId, table)) = s
-        let parentScope = case lookupTableEntry scopeId table of
-                Just (EntryProc _ _ parentScope _) -> parentScope
-                Just (EntryFunc _ _ parentScope _) -> parentScope
-                Just (EntryType _ _ parentScope _) -> parentScope
-                Just (EntryVar _ _ parentScope _) -> parentScope
-                Nothing -> Global
-        setState (inp, (parentScope, ns, assignedSym), (nextId, table))
+updateScopeId = do
+    s <- getState
+    let (inp, (Scope scopeId, ns, assignedSym), (nextId, table)) = s
+    let parentScope = case lookupTableEntry scopeId table of
+            Just (EntryProc _ _ parentScope _) -> parentScope
+            Just (EntryFunc _ _ parentScope _) -> parentScope
+            Just (EntryType _ _ parentScope _) -> parentScope
+            Just (EntryVar _ _ parentScope _) -> parentScope
+            Nothing -> Global
+    setState (inp, (parentScope, ns, assignedSym), (nextId, table))
 
 defineTypeEntry (Symb (ResolvedName typeId absName) m) sameNameCons consIds = do
     scope <- getScope
-    updateEntry typeId $ EntryType (Symb (ResolvedName typeId absName) m) absName scope $ Def (sameNameCons, SType consIds)
+    updateEntry typeId $ EntryType (Symb (ResolvedName typeId absName) m) absName scope $ Just (sameNameCons, SType consIds)
 
 defineRecordTypeEntry (Symb (ResolvedName typeId absName) m) sameNameCons consId memberIds = do
     scope <- getScope
-    updateEntry typeId $ EntryType (Symb (ResolvedName typeId absName) m) absName scope $ Def (sameNameCons, RecType consId memberIds)
+    updateEntry typeId $ EntryType (Symb (ResolvedName typeId absName) m) absName scope $ Just (sameNameCons, RecType consId memberIds)
 
 getScope = do
     s <- getState
     let (_, (scope, _, _), _) = s
     return scope
 
-defineValCons :: Symbol -> ID -> [ID] -> NameResolver ()
 defineValCons (Symb (ResolvedName consId absName) m) typeId paramIds = do
     scope <- getScope
-    updateEntry consId $ EntryValCons (Symb (ResolvedName consId absName) m) absName scope $ Def (typeId, paramIds)
+    updateEntry consId $ EntryValCons (Symb (ResolvedName consId absName) m) absName scope $ Just (typeId, paramIds)
 
 setAssigned s = P $ \(inp, (scopeId, absName, _), table) -> Left ((), (inp, (scopeId, absName, Just s), table))
 removeAssigned = P $ \(inp, (scopeId, absName, _), table) -> Left ((), (inp, (scopeId, absName, Nothing), table))
@@ -394,30 +407,22 @@ removeAssigned = P $ \(inp, (scopeId, absName, _), table) -> Left ((), (inp, (sc
 -- | Update a variable's type expression to have resolved symbols.
 updateVarType name varType = do
     scope <- getScope
-    updateEntry (getSymId name) $ EntryVar name (toAbs name) scope (Def varType)
+    updateEntry (symId name) $ EntryVar name (symTrace name) scope (Just varType)
     
-    where toAbs (Symb (ResolvedName _ a) _) = a
-
 updateEntry id newEntry = do
     s <- getState
     let (inp, scope, (nid, table)) = s
-    table <- case updateTableEntry id newEntry table of
-            Just t -> return t
-            Nothing -> empty
+    table <- maybe (error "Bug") return (updateTableEntry id newEntry table)
     setState (inp, scope, (nid, table))
 
-getParamIds = fmap $ \(Param s _, _) -> getSymId s
+getParamIds = getSIds $ \(Param s _, _) -> s
 
-toStr (Symb (IDENTIFIER x) _) = x
-toStr (Symb (ResolvedName _ (x:|_)) _) = x
-
-getSymId (Symb (ResolvedName id _) _) = id
-getSymId (Symb (IDENTIFIER x) _) = error x
+getSIds f = fmap $ \x -> symId $ f x
 
 type AssignedSymbol = Maybe Symbol
 type ScopeState = (Scope, AbsoluteName, AssignedSymbol)
-type State = (Program, ScopeState, Table)
+type State = (Program, ScopeState, TableState)
 type NameResolver a = AbsParser State a
 
-intState :: Program -> Table -> State
+intState :: Program -> TableState -> State
 intState p t = (p, (Global, "Global" :| [], Nothing), t)

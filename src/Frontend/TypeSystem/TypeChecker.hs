@@ -34,7 +34,7 @@ import Frontend.LexicalAnalysis.Token as T
 import CompilerUtilities.ProgramTable
 import CompilerUtilities.AbstractParser (AbsParser(P), getState, setState, parse)
 
-typeCheck :: Program -> Table -> (Program, Table, [Error])
+typeCheck :: Program -> TableState -> (Program, TableState, [Error])
 typeCheck p t = case parse program $! initState p t of
     Left (p, (_, t, _, err)) -> (p, t, err)
 
@@ -59,7 +59,6 @@ procedure (Proc ps retType name stmts) = do
     last <- statement last
     stmts <- case last of
         Nothing -> do   -- last statement is an assignment
-
             isUnitRetType <- isUnit retType
             if isUnitRetType
             then return $ fromList $ toList stmts ++ [unitStmt]
@@ -89,16 +88,14 @@ statements (x:|xs) = do
     return (x:xs)
 
 statement (Assignment var r) = do
-    varType <- lookupType (getId var)
+    varType <- lookupType (symId var)
     t <- expressionType r
     case varType of
         Nothing -> defineVarType var t
         Just someType -> do
             a <- assertStructural someType t
             unless a $ error $ show var ++ " has type " ++ show someType ++ " but a value of " ++ show t ++ " is assigned."
-    return Nothing
-
-    where getId (Symb (ResolvedName id _) _) = id
+    return Nothing  -- Assignment statement has no type.
 
 statement (StmtExpr e) = do
     t <- expressionType e
@@ -181,7 +178,7 @@ toStr (ResolvedName _ (s:|_)) = s
 type Error = String
 type Status = M.Map ID Bool   -- Keep track of which symbols have been type checked.
 
-type State = (Program, Table, Status, [Error])
+type State = (Program, TableState, Status, [Error])
 
 initState p t = (p, t, M.fromList [], [])
 
@@ -205,8 +202,8 @@ isTypeChecked id = do
 defineVarType (Symb (ResolvedName id absName) m) varType = do
     t <- getTable
     let entry = lookupTableEntry id t
-    let (Just (EntryVar name absName s Undefined)) = entry
-    updateEntry id $ EntryVar name absName s (Def varType)
+    let (Just (EntryVar name absName s Nothing)) = entry
+    updateEntry id $ EntryVar name absName s (Just varType)
 
 updateEntry :: ID -> TableEntry -> TypeChecker ()
 updateEntry id newEntry = do
@@ -220,10 +217,10 @@ lookupType id = do
     t <- getTable
     case lookupTableEntry id t of
         Just entry -> case entry of
-            EntryProc _ _ _ (Def (pIds, ret)) -> arrowType pIds ret
-            EntryFunc _ _ _ (Def (pIds, ret)) -> arrowType pIds ret
-            EntryVar _ _ _ (Def t) -> return $ Just t
-            EntryValCons _ _ _ (Def (retId, pIds)) -> do
+            EntryProc _ _ _ (Just (pIds, ret)) -> arrowType pIds ret
+            EntryFunc _ _ _ (Just (pIds, ret)) -> arrowType pIds ret
+            EntryVar _ _ _ (Just t) -> return $ Just t
+            EntryValCons _ _ _ (Just (retId, pIds)) -> do
                 let (Just retName) = getName retId t
                 let retType = TSymb retName
                 case pIds of
@@ -231,13 +228,14 @@ lookupType id = do
                     _ -> arrowType pIds retType
             EntryType {} -> error $ "Expected value, but " ++ show id ++ " is a type."
             _ -> return Nothing
-        Nothing -> error "Unresolved symbol?"
+        Nothing -> error $ "Bug: Unresolved symbol found: " ++ show id
 
     where
     getName id table = do
         e <- lookupTableEntry id table
         case e of
             EntryType name _ _ _ -> return name
+            _ -> error $ "Bug: getName called on entry of a non-type element. " ++ show id
 
     arrowType pIds retType = do
         paramType <- constructProductType pIds
@@ -255,11 +253,8 @@ lookupType id = do
         let (Just t') = t
         constructProductType' xs (aux ++ [t'])
 
-getTable :: TypeChecker SymTable
-getTable = do
-    s <- getState
-    let (inp, (_, table), c, err) = s
-    return table
+getTable :: TypeChecker Table
+getTable = getState >>= \(_, (_, table), _, _) -> return table
 
 next = P $ \(Program elements, t, c, err) -> case elements of
     x:xs -> Left (x, (Program xs, t, c, err))

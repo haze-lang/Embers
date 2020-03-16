@@ -22,9 +22,8 @@ module Frontend.SyntacticAnalysis.Parser where
 import Frontend.AbstractSyntaxTree
 import CompilerUtilities.ProgramTable (
     TableEntry(EntryProc, EntryFunc, EntryValCons, EntryVar, EntryType),
-    Definition(Def, Undefined),
     Scope(Scope, Global),
-    Table, SymTable, ID, AbsoluteName,
+    TableState, Table, ID, AbsoluteName,
     updateTableEntry, insertTableEntry, lookupTableEntry, initializeTable, nameLookup)
 import CompilerUtilities.AbstractParser
 import Control.Applicative
@@ -39,7 +38,7 @@ import qualified Frontend.LexicalAnalysis.Scanner
 import Frontend.LexicalAnalysis.Token
 
 -- | Parses the given token stream and returns syntax tree.
-parseTokens :: [Token] -> (Program, Table)
+parseTokens :: [Token] -> (Program, TableState)
 parseTokens src = case parse program $ initParserState src of
     Left (p, ([], _, _, t, err)) -> (p, t)
     Left (p, (ts, _, _, t, err)) -> error $ "Parser did not consume input. Remaining: " ++ show ts
@@ -107,7 +106,7 @@ block = do
     many wspace
     token RBRACE
     return $ fromList xs
-    
+
     where
     terminatedStatement = do
         s <- statement
@@ -396,7 +395,7 @@ type VParamNo = Int
 type MiscState = (LambdaNo, VParamNo)
 type ErrorState = [String]
 type ScopeState = (Scope, AbsoluteName)
-type ParserState = ([Token], ScopeState, MiscState, Table, ErrorState)
+type ParserState = ([Token], ScopeState, MiscState, TableState, ErrorState)
 
 initParserState :: [Token] -> ParserState
 initParserState tokens = (tokens, (Global, "Global" :| []), (0, 0), initializeTable, [])
@@ -412,13 +411,12 @@ item = P $ \(inp, name, lambdaNo, t, err) -> case inp of
 -- Parser Helpers
 
 validateNames :: Symbol -> Symbol -> Parser ()
-validateNames name nameTypeSig = 
-    when (toStr name /= toStr nameTypeSig) $
-        addError $ "Type Signature and Definition have mismatching names: " ++ (toStr name)
+validateNames name nameTypeSig = when (symStr name /= symStr nameTypeSig) $
+        addError $ "Type Signature and Definition have mismatching names: " ++ (symStr name)
 
 -- | If Data Constructor has same name as Type, add _C suffix to constructor.
 handleSameCons (Symb (IDENTIFIER cons) m) typeName =
-    if cons == toStr typeName
+    if cons == symStr typeName
     then return $ Symb (IDENTIFIER (cons ++ "_C")) m
     else return $ Symb (IDENTIFIER cons) m
 
@@ -447,13 +445,13 @@ typeParamIdent = startsWithLower
 
 startsWithLower = do
     name <- ident
-    if Data.Char.isLower $ head $ toStr name
+    if Data.Char.isLower $ head $ symStr name
     then return name
     else empty
 
 startsWithUpper = do
     name <- ident
-    if Data.Char.isUpper $ head $ toStr name
+    if Data.Char.isUpper $ head $ symStr name
     then return name
     else empty
 
@@ -540,7 +538,7 @@ resolve (Symb (IDENTIFIER name) m) = do
     let (_, (_, absName), _, (_, table), _) = s
     resolve' name absName absName table
     where
-        resolve' :: String -> AbsoluteName -> AbsoluteName -> SymTable -> Parser (Maybe Symbol)
+        resolve' :: String -> AbsoluteName -> AbsoluteName -> Table -> Parser (Maybe Symbol)
         resolve' name absName originalTrace tableState = do
             case nameLookup (makeAbs name absName) tableState of
                 Just (id, _) -> return $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
@@ -551,12 +549,7 @@ resolve (Symb (IDENTIFIER name) m) = do
         qualifyName (_ :| []) = Nothing
         qualifyName (name :| trace) = Just $ Data.List.NonEmpty.fromList trace
 
-defineParameters ps = do
-    ps <- defineParams ps
-    return ps
-
-    where
-    defineParams = foldlM (\aux (Param name c, t) -> do
+defineParameters = foldlM (\aux (Param name c, t) -> do
         p <- defineName name $ ExprVal $ Just t
         return $ aux ++ [((Param p c), t)]) []
 
@@ -573,14 +566,13 @@ beginScope (Symb (IDENTIFIER name) m) elem = do
     let (inp, (scopeId, ns), lambdaNo, _, err) = s
     absName <- return $ name <| ns
     id <- case elem of
-        Procedure -> insertEntry $ EntryProc (Symb (IDENTIFIER name) m) absName scopeId Undefined
-        Function -> insertEntry $ EntryFunc (Symb (IDENTIFIER name) m) absName scopeId Undefined
-        Constructor -> insertEntry $ EntryValCons (Symb (IDENTIFIER name) m) absName scopeId Undefined
-        NullConstructor typeId -> insertEntry $ EntryValCons (Symb (IDENTIFIER name) m) absName scopeId (Def (typeId, []))
-        Type -> insertEntry $ EntryType (Symb (IDENTIFIER name) m) absName scopeId Undefined
-        ExprVal varType -> insertEntry $ EntryVar (Symb (IDENTIFIER name) m) absName scopeId $ case varType of
-            Just varType -> Def varType
-            Nothing -> Undefined
+        Procedure -> insertEntry $ EntryProc (Symb (IDENTIFIER name) m) absName scopeId Nothing
+        Function -> insertEntry $ EntryFunc (Symb (IDENTIFIER name) m) absName scopeId Nothing
+        Constructor -> insertEntry $ EntryValCons (Symb (IDENTIFIER name) m) absName scopeId Nothing
+        NullConstructor typeId -> insertEntry $ EntryValCons (Symb (IDENTIFIER name) m) absName scopeId (Just (typeId, []))
+        Type -> insertEntry $ EntryType (Symb (IDENTIFIER name) m) absName scopeId Nothing
+        ExprVal varType -> insertEntry $ EntryVar (Symb (IDENTIFIER name) m) absName scopeId varType
+    
     -- TableState is changed after insertion, so we extract the updated table.
     s <- getState
     let (_, _, _, table, _) = s
@@ -617,7 +609,7 @@ endScope = do
 
 getNextVirtualParam = do
     vpNo <- consumeVirtualParam
-    return (Symb (IDENTIFIER ("_p" ++ show vpNo)) (Meta 0 0 ""))
+    return $ Symb (IDENTIFIER ("_p" ++ show vpNo)) (Meta 0 0 "")
 
     where consumeVirtualParam = P $ \(inp, scope, (lNo, vpNo), table, err) -> Left (vpNo, (inp, scope, (lNo, vpNo + 1), table, err))
 
@@ -626,23 +618,18 @@ defineNameInParent (Symb (IDENTIFIER name) m) elem = do
     let (inp, (scopeId, (n:|ns)), lambdaNo, _, err) = s
     absName <- return $ name :| ns
     id <- case elem of
-        Procedure -> insertEntry $ EntryProc (Symb (IDENTIFIER name) m) absName scopeId Undefined
-        Function -> insertEntry $ EntryFunc (Symb (IDENTIFIER name) m) absName scopeId Undefined
-        Constructor -> insertEntry $ EntryValCons (Symb (IDENTIFIER name) m) absName scopeId Undefined
-        NullConstructor typeId -> insertEntry $ EntryValCons (Symb (IDENTIFIER name) m) absName scopeId (Def (typeId, []))
-        Type -> insertEntry $ EntryType (Symb (IDENTIFIER name) m) absName scopeId Undefined
-        ExprVal varType -> insertEntry $ EntryVar (Symb (IDENTIFIER name) m) absName scopeId $ case varType of
-            Just varType -> Def varType
-            Nothing -> Undefined
+        Procedure -> insertEntry $ EntryProc (Symb (IDENTIFIER name) m) absName scopeId Nothing
+        Function -> insertEntry $ EntryFunc (Symb (IDENTIFIER name) m) absName scopeId Nothing
+        Constructor -> insertEntry $ EntryValCons (Symb (IDENTIFIER name) m) absName scopeId Nothing
+        NullConstructor typeId -> insertEntry $ EntryValCons (Symb (IDENTIFIER name) m) absName scopeId (Just (typeId, []))
+        Type -> insertEntry $ EntryType (Symb (IDENTIFIER name) m) absName scopeId Nothing
+        ExprVal varType -> insertEntry $ EntryVar (Symb (IDENTIFIER name) m) absName scopeId varType
+    
     -- TableState is changed after insertion, so we extract the updated table.
     s <- getState
     let (_, _, _, table, _) = s
     setState (inp, (Scope id, (n:|ns)), lambdaNo, table, err)
     return $ Symb (ResolvedName id absName) m
-
-toStr :: Symbol -> String
-toStr (Symb (IDENTIFIER x) _) = x
-toStr (Symb (ResolvedName _ (x:|_)) _) = x
 
 insertEntry :: TableEntry -> Parser ID
 insertEntry entry = P (\(inp, s, lambdaNo, (id, table), err) ->
