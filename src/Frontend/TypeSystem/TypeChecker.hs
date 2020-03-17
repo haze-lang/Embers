@@ -113,7 +113,7 @@ expressionType (Ident (Symb (ResolvedName id absName) _)) = do
     t <- lookupType id
     case t of
         Just te -> return te
-        Nothing -> addError ("Inference not supported: " ++ show id) >>= const empty
+        Nothing -> error $ "Inference not supported: " ++ show id
 
 expressionType (Tuple es) = do
     ts <- f $ toList es
@@ -125,6 +125,7 @@ expressionType (Tuple es) = do
         return $ aux ++ [t]) []
 
 expressionType (Switch e cases def) = error "Switch expression not supported."
+expressionType (Lambda _) = error "Lambda expression not supported."
 
 expressionType (Conditional condition e1 e2) = do
     cType <- expressionType condition

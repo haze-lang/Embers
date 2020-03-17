@@ -31,40 +31,25 @@ import qualified Data.Char
 
 -- |Scans the given string and returns list of tokens.
 scan :: String -> ([Token], [Error])
-scan inp = scanInit $ initState inp
+scan str = case parse (many root) (initState str) of
+    Left (tokens, (Str [] m, e)) -> (tokens, e)
+    Left (tokens, (Str leftover m, e)) -> (tokens, e)
+    Right (Str leftover m, e) -> ([], e)
 
-scanInit :: LexerState -> ([Token], [Error])
-scanInit src = case src of 
-    (Str []  _, e) -> ([], e)
-    _ -> case parse (many wspace) src of
-        Left (ts, (Str [] _, e)) -> (ts, e)
-        Left (ts, rest) -> combineTokens ts (scanUtil rest)
-        Right _ -> scanUtil src
+root = trash <|> symbolsLiterals <|> keywordsIdent
 
-combineTokens :: [Token] -> ([Token], [Error]) -> ([Token], [Error])
-combineTokens tokens (tokens2, err) = (tokens++tokens2, err)
+keywordsIdent = do
+    id <- ident
+    let name = case id of
+            T (TkIdent (IDENTIFIER s)) _ -> s
+            T (TkSymb (IDENTIFIER s)) _ -> s
+    case getKeyword name of
+        Just t -> return t
+        Nothing -> return id
 
-scanUtil :: LexerState -> ([Token], [Error])
-scanUtil xs = case parse symbolsLiterals xs of
-    Left (t, (Str [] _, e)) -> ([t], e)
-    Left (t, rest) -> combineTokens [t] (scanInit rest)
-
-    Right _ -> case parse ident xs of
-        Left (ident, (Str [] _, err)) -> case parse keywords xs of
-            Left (keyword, (Str [] _, err)) -> ([keyword], err)
-            _ -> ([ident], err)
-        Left (ident, rest) -> case parse keywords xs of
-            Left (keyword, (Str [] _, err)) -> ([keyword], err)
-            Left (keyword, rest2) -> if rest == rest2 
-                then combineTokens [keyword] (scanInit rest2)
-                else combineTokens [ident] (scanInit rest)
-            Right _ -> combineTokens [ident] (scanInit rest)
-        Right (Str _ m, err) -> combineTokens [T (Invalid $ show err) m] (scanInit (dropSourceError xs err)) -- Error
-        where
-            dropSourceError :: LexerState -> [Error] -> LexerState
-            dropSourceError src err = case src of
-                (Str [] m, err2) -> (Str [] m, err2 ++ err)
-                (Str (x:xs) m, err2) -> (Str xs (incCol m), err ++ err2)
+getKeyword str = case parse keywords (initState str) of
+    Left (kword, (Str [] _, [])) -> Just kword
+    _ -> Nothing
 
 initState :: String -> LexerState
 initState str = (Str str (Meta 1 1 ""), [])
@@ -75,7 +60,9 @@ keyword word t = do
     x <- tryString word
     return $ T t m
 
-wspace = do
+trash = wspaces <|> comment
+
+wspaces = do
     m <- getMeta
     do 
         some space
@@ -166,6 +153,14 @@ identSymbols = do
         <|> tryChar '?'
     return (T (TkSymb $ IDENTIFIER s) m)
 
+-- Comments ending with file ending are not supported.
+comment :: Lexer Token
+comment = do
+    m <- getMeta
+    tryString "//" <|> tryString "--"
+    many (sat Data.Char.isPrint)
+    line                            -- Generate a newline token instead of comment for cases where terminator is required.
+
 numberLit :: Lexer Token
 numberLit = do
     m <- getMeta
@@ -232,6 +227,9 @@ failToken :: String -> Metadata -> Lexer Token
 failToken message m = P $ \(src, err) -> Left (T (Invalid message) m, (src, err ++ [formMessage message m]))
     where formMessage str (Meta c l _) = "At line " ++ show l ++ ", cloumn " ++ show c ++ ": " ++ str
 
+failToken' message = P $ \(Str s m, err) -> Left (T (Invalid message) m, (Str s m, err ++ [formMessage message m]))
+    where formMessage str (Meta c l _) = "At line " ++ show l ++ ", cloumn " ++ show c ++ ": " ++ str
+
 type Error = String
 type LexerState = (StrSource, [Error])
 type Lexer a = AbsParser LexerState a
@@ -241,9 +239,11 @@ type Lexer a = AbsParser LexerState a
 getMeta :: Lexer Metadata
 getMeta = P $ \(Str str m, err) -> Left (m, (Str str m, err))
 
-isSpaceToken t = case t of
-    T (WHITESPACE Space) _ -> True
-    _ -> False
+isSpaceToken (T (WHITESPACE Space) _) = True
+isSpaceToken _ = False
+
+isCommentToken (T COMMENT _) = True
+isCommentToken _ = False
 
 item :: Lexer Char
 item = P $ \inp -> case inp of
@@ -262,10 +262,10 @@ instance Eq StrSource where
 
 sat :: (Char -> Bool) -> Lexer Char
 sat p = do
-        x <- item
-        if p x
-        then return x
-        else empty
+    x <- item
+    if p x
+    then return x
+    else empty
 
 tryChar :: Char -> Lexer Char
 tryChar x = sat (== x)

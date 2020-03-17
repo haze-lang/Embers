@@ -141,6 +141,7 @@ statement (Assignment l r) = do
     setAssigned l   -- Every symbol on right side of assignment must have been defined before.
     r <- expression r
     removeAssigned
+    -- markDefined l
     return $ Assignment l r
 
 statement (StmtExpr e) = do
@@ -315,8 +316,8 @@ resolve (Symb (IDENTIFIER name) m) isType = do
                 if isType
                 then return $ Just $ Symb (ResolvedName id (makeAbs name scopeTrace)) m
                 else checkType entry id name scopeTrace
-            else error $ "Use before definition: " ++ name ++ " " ++ show m
-        
+            else error $ "Use before definition: " ++ name ++ show assignedSym ++ " " ++ show m
+
         findInParentScope = maybe (return Nothing) (\absName -> resolve' name absName originalTrace table assignedSym) (dequalifyName scopeTrace)
 
     -- Are we looking for a data constructor and found a type constructor with the same name?

@@ -53,7 +53,7 @@ data Metadata = Meta Column Line Filename deriving Eq
 
 incCol (Meta c l f) = Meta (c + 1) l f
 decCol (Meta c l f) = Meta (c - 1) l f
-incLine (Meta c l f) = Meta 0 (l + 1) f
+incLine (Meta c l f) = Meta 1 (l + 1) f
 
 data StrSource = Str String Metadata deriving Show
 

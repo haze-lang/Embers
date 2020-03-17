@@ -102,15 +102,16 @@ block :: Parser (NonEmpty Statement)
 block = do
     token LBRACE
     many wspace
-    xs <- some terminatedStatement
+    x <- statement
+    xs <- many terminatedStatement
     many wspace
     token RBRACE
-    return $ fromList xs
+    return $ x:|xs
 
     where
     terminatedStatement = do
-        s <- statement
         terminator
+        s <- statement
         return s
 
 statement :: Parser Statement
@@ -310,7 +311,6 @@ groupedExpression = do
 
 conditionalExpr :: Parser Expression
 conditionalExpr = do
-    many wspace
     token IF
     e1 <- expression
     many wspace
@@ -351,7 +351,7 @@ lambdaExpr = procLambdaExpr <|> funcLambdaExpr
         params <- formalParam
         params <- defineLambdaParams (toList params) []
         token DARROW
-        params <- return params
+        many wspace
         do  b <- block
             endScope
             return (Lambda $ ProcLambda name (fromList params) b)
@@ -421,7 +421,11 @@ handleSameCons (Symb (IDENTIFIER cons) m) typeName =
     else return $ Symb (IDENTIFIER cons) m
 
 terminator :: Parser Token
-terminator = token SEMICOLON <|> token (WHITESPACE Newline)
+terminator = token SEMICOLON
+    <|> do
+    t <- token (WHITESPACE Newline)
+    many $ token (WHITESPACE Newline)
+    return t
 
 sat :: (TokenType -> Bool) -> Parser Token
 sat p = do
