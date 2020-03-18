@@ -21,132 +21,72 @@ module ScannerSpec (scannerTest) where
     
 import Test.Hspec
 import Test.QuickCheck
-import Frontend.AbstractParser
+import CompilerUtilities.AbstractParser
 import Frontend.LexicalAnalysis.Scanner
 import Frontend.LexicalAnalysis.Token
 
-testSymbol xs t = testPass xs "scans symbol" parseSymbol (const t)
+testStream xs = testPass xs "token stream" scanner
 
-testIdentPass xs = testPass xs "identifier" parseIdent id
+testSingle xs t = testPass xs "single token" scanner [t]
 
-testIdentFail xs = testFail xs "identifier" parseIdent
-
-testNumLiteral xs = testPass xs "number literal" parseNumLiteral read
-
-testCharLiteral xs = testPass xs "character literal" parseCharLiteral read
-
-testStrLiteral xs = testPass xs "string literal" parseStrLiteral (\xs -> take (length xs - 2) (drop 1 xs))
-
-testUnitLiteral xs = testPass xs "unit literal" parseUnitLiteral (const UNIT)
-
-testKeyword xs t = testPass xs "keyword" parseKeywords (const t)
-
-testSpace xs = testPass xs "space" parseSpace (const (WHITESPACE Space))
-testTab xs = testPass xs "tab" parseTab (const (WHITESPACE Tab))
-testNewline xs = testPass xs "newline" parseLine (const (WHITESPACE Newline))
+testSingleFail xs t = testFail xs "single token" scanner [t]
 
 scannerTest :: IO ()
 scannerTest = hspec $ do
     describe "Individual Tokens" $ do
-        testSymbol "|" BAR
-        testSymbol "X" CROSS
-        testSymbol "=" EQUALS
-        testSymbol ":" COLON
-        testSymbol "->" ARROW
-        testSymbol "=>" DARROW
-        testSymbol "\\" BSLASH
-        testSymbol "(" LPAREN
-        testSymbol ")" RPAREN
-        testSymbol "{" LBRACE
-        testSymbol "}" RBRACE
-        testKeyword "if" IF
-        testKeyword "then" THEN
-        testKeyword "else" ELSE
-        testKeyword "type" TYPE
-        testKeyword "record" RECORD
-        testKeyword "switch" SWITCH
-        testKeyword "default" DEFAULT
-        testSpace " "
-        testTab "\t"
-        testNewline "\n"
-        testNewline "\r"
-        testNewline "\r\n"
-        testIdentPass "Asdasd"
-        testIdentPass "asdasd"
-        testIdentPass "asdasd1123"
-        testIdentFail "_sdasd" ""
-        testIdentFail "1sdasd" ""
-        testNumLiteral "123123"
-        testCharLiteral "\'A\'"
-        testCharLiteral "\'0\'"
-        testStrLiteral "\"asd\""
-        testUnitLiteral "()"
+        testSingle "|" BAR
+        testSingle "X" CROSS
+        testSingle "=" EQUALS
+        testSingle ":" COLON
+        testSingle "->" ARROW
+        testSingle "=>" DARROW
+        testSingle "\\" BSLASH
+        testSingle "(" LPAREN
+        testSingle ")" RPAREN
+        testSingle "{" LBRACE
+        testSingle "}" RBRACE
+        testSingle "if" IF
+        testSingle "then" THEN
+        testSingle "else" ELSE
+        testSingle "type" TYPE
+        testSingle "record" RECORD
+        testSingle "switch" SWITCH
+        testSingle "default" DEFAULT
+        testSingle "  " $ WHITESPACE Space
+        testSingle "\t" $ WHITESPACE Tab
+        testSingle "\n" $ WHITESPACE Newline
+        testSingle "\r\n" $ WHITESPACE Newline
+        testSingle "\r" $ WHITESPACE Newline
+        testSingle "//rasdasdasda*\n" $ WHITESPACE Newline
+        testSingle "asd" $ TkIdent $ ide "asd"
+        testSingle "Asdasd" $ TkIdent $ ide "Asdasd"
+        testSingle "asd123" $ TkIdent $ ide "asd123"
+        testSingle "Asd123" $ TkIdent $ ide "Asd123"
+        testSingle "asd" $ TkIdent $ ide "asd"
+        testSingle "1" $ TkLit $ NUMBER 1
+        testSingle "123" $ TkLit $ NUMBER 123
+        testSingle "\'a\'" $ TkLit $ CHAR 'a'
+        testSingle "\"asd\"" $ TkLit $ STRING "asd"
+        testSingle "()" $ TkLit UNIT
+        testSingleFail "_sdasd" $ TkIdent $ ide "_sdasd"
+        testSingleFail "1sdasd" $ TkIdent $ ide "1sdasd"
     describe "Token Stream" $ do
-        testScanner "((\r\n))" [LPAREN,LPAREN,WHITESPACE Newline,RPAREN,RPAREN]
-        testScanner "\t \t\t\n \n" [WHITESPACE Tab, WHITESPACE Space, WHITESPACE Tab, WHITESPACE Tab, WHITESPACE Newline, WHITESPACE Space, WHITESPACE Newline]
-        testScanner "asd ddf" [(TkIdent (IDENTIFIER "asd")), WHITESPACE Space, (TkIdent (IDENTIFIER "ddf"))]
+        testStream "((\r\n))" [LPAREN,LPAREN,WHITESPACE Newline,RPAREN,RPAREN]
+        testStream "\t\t\t\t\t\t\t\t" [WHITESPACE Tab]
+        testStream "\t \t\t\n \n" [WHITESPACE Tab, WHITESPACE Space, WHITESPACE Tab, WHITESPACE Newline, WHITESPACE Space, WHITESPACE Newline]
+        testStream "asd ddf" [TkIdent $ ide "asd", WHITESPACE Space, TkIdent $ ide "ddf"]
+        testStream "asd\n// asdasd *\nrecord" [TkIdent $ ide "asd", WHITESPACE Newline, WHITESPACE Newline, RECORD]
 
 -- Helpers & Utility
 
-testScanner xs tk = testPass xs "scans stream" (tokenTypes.scan) (const tk)
-    where
-        tokenTypes :: [Token] -> [TokenType]
-        tokenTypes = foldl (\aux (T t _) -> aux ++ [t]) []
+scanner inp = case scan inp of
+    (tokens, _) -> tokenTypes tokens
 
-testPass inp label f g = it ("scans " ++ label ++ " " ++ inp) $ f inp `shouldBe` g inp
+testPass inp label f g = it ("scans " ++ label ++ " " ++ show inp) $ f inp `shouldBe` g
 
-testFail inp label f v = it ("doesn't scan " ++ label ++ " " ++ inp) $ f inp `shouldBe` v
+testFail inp label f v = it ("doesn't scan " ++ label ++ " " ++ show inp) $ f inp `shouldNotBe` v
 
-strSrc xs = (Str xs (Meta 0 0 ""))
+tokenTypes :: [Token] -> [TokenType]
+tokenTypes = foldl (\aux (T t _) -> aux ++ [t]) []
 
-miscError = error "Unexpected scanner output."
-
-testMeta :: Metadata -> Metadata -> Int -> Int -> a -> a
-testMeta tm lm len ln val = case tm of
-    Meta 0 0 "" -> case lm of
-        Meta c l "" -> if c == len && l == ln
-            then val
-            else error "Invalid position in leftover metadata."
-        _ -> error "Invalid leftover metadata."
-    
-    _ -> error "Invalid token metadata. Beginning of token must be from column 0, line 0."
-
-applyParseCol p inp = case parse p (strSrc inp) of
-    Left (T x m, (Str [] m2)) -> testMeta m m2 (length inp) 0 x
-    _ -> miscError
-
-applyParseLine p inp = case parse p (strSrc inp) of
-    Left (T x m, (Str [] m2)) -> testMeta m m2 0 1 x
-    _ -> miscError
-
-parseSymbol = applyParseCol symbols
-
-parseIdent inp = case parse ident (strSrc inp) of
-    Left ((T t m), (Str [] m2)) -> case t of
-        TkIdent (IDENTIFIER name) -> testMeta m m2 (length inp) 0 name
-        _ -> miscError
-    Right _ -> ""
-        
-parseNumLiteral inp = case parse numberLit (strSrc inp) of
-    Left (T (TkLit (NUMBER lit)) m, (Str [] m2)) -> testMeta m m2 (length inp) 0 lit
-    _ -> miscError
-
-parseCharLiteral inp = case parse charLit (strSrc inp) of
-    Left (T (TkLit (CHAR lit)) m, (Str [] m2)) -> testMeta m m2 (length inp) 0 lit
-    _ -> miscError
-
-parseStrLiteral inp = case parse stringLit (strSrc inp) of
-    Left (T (TkLit (STRING lit)) m, (Str [] m2)) -> testMeta m m2 (length inp) 0 lit
-    _ -> miscError
-
-parseUnitLiteral inp = case parse unitLit (strSrc inp) of
-    Left (T (TkLit UNIT) m, (Str [] m2)) -> testMeta m m2 (length inp) 0 UNIT
-    _ -> miscError
-
-parseKeywords = applyParseCol keywords
-
-parseSpace = applyParseCol space
-
-parseTab = applyParseCol tab
-
-parseLine = applyParseLine line
+ide = IDENTIFIER
