@@ -25,6 +25,7 @@ where
 
 import Control.Monad (when)
 import Control.Applicative (many)
+import Data.Maybe (isJust)
 import CompilerUtilities.AbstractParser
 import Frontend.LexicalAnalysis.Token
 import qualified Data.Char (isUpper)
@@ -61,22 +62,24 @@ programElement = do
 
 procedure :: ProgramElement -> NameResolver ProgramElement
 procedure (Proc paramType retType name body) = do
-    pushScope name
+    startScope name
+    defineLocals $ getParamIds paramType
     procType <- mappingType (paramType, retType)
     let (paramType, retType) = procType
     body <- block body
     let p = Proc paramType retType name body
-    popScope p
+    endScope p
     return p
 
 function :: ProgramElement -> NameResolver ProgramElement
 function (Func paramType retType name body) = do
-    pushScope name
+    startScope name
+    defineLocals $ getParamIds paramType
     funcType <- mappingType (paramType, retType)
     let (paramType, retType) = funcType
     body <- expression body
     let f = Func paramType retType name body
-    popScope f
+    endScope f
     return f
 
 _type :: Type -> NameResolver ProgramElement
@@ -112,7 +115,7 @@ _type (Record typeName cons members) = do
     params <- boundParams params
     let paramIds = getParamIds params
     defineValCons consName typeId paramIds
-    cons <- return $ ValCons consName params
+    let cons = ValCons consName params
     return $ Ty $ Record typeName cons (fromList members)
 
     where
@@ -138,10 +141,9 @@ block stmts = do
 
 statement :: Statement -> NameResolver Statement
 statement (Assignment l r) = do
-    setAssigned l   -- Every symbol on right side of assignment must have been defined before.
+    -- Every symbol on right side of assignment must have been defined before.
     r <- expression r
-    removeAssigned
-    -- markDefined l
+    defineLocal (symId l)
     return $ Assignment l r
 
 statement (StmtExpr e) = do
@@ -180,21 +182,20 @@ expression (Switch switch cs def) = do
         expression e
         return $ aux ++ [(p, e)]) []
 
+-- Lambda expressions must not reference symbols defined after them.
 expression (Lambda (ProcLambda name params body)) = do
-    setAssigned name    -- Lambda expressions must not reference symbols defined after them.
-    pushScope name
+    startScopeLambda name
+    defineLocals $ toList $ fmap (\(Param s _) -> symId s) params
     body <- block body
-    popScopeLambda -- Lambdas will be defined (in table entry) after type inference.
-    removeAssigned
+    endScopeLambda -- Lambdas will be defined (in table entry) after type inference.
     return $ Lambda $ ProcLambda name params body
 
 expression (Lambda (FuncLambda name params body)) = do
-    setAssigned name
-    pushScope name
+    startScopeLambda name
+    defineLocals $ toList $ fmap (\(Param s _) -> symId s) params
     body <- expression body
     checkLocals body $ symId name
-    popScopeLambda
-    removeAssigned
+    endScopeLambda
     return $ Lambda $ FuncLambda name params body
 
 expression (App l arg) = do
@@ -300,38 +301,33 @@ resolve :: Symbol -> Bool -> NameResolver (Maybe Symbol)
 resolve (Symb (ResolvedName id absName) m) _ = return $ Just $ Symb (ResolvedName id absName) m
 resolve (Symb (IDENTIFIER name) m) isType = do
     s <- getState
-    let (_, (_, absName, assignedSym), (_, table)) = s
-    resolve' name absName absName table assignedSym
+    let (_, (_, absName, symbolStack), (_, table)) = s
+    resolve' name absName absName table symbolStack
 
     where
-    resolve' :: String -> AbsoluteName -> AbsoluteName -> Table -> Maybe Symbol -> NameResolver (Maybe Symbol)
-    resolve' name scopeTrace originalTrace table assignedSym = do
+    resolve' :: String -> AbsoluteName -> AbsoluteName -> Table -> SymbolStack -> NameResolver (Maybe Symbol)
+    resolve' name scopeTrace originalTrace table symbolStack = do
         let lookupResult = nameLookup (makeAbs name scopeTrace) table
         maybe findInParentScope processEntry lookupResult
 
         where
         processEntry (id, entry) =
-            if (id, entry) `isDefinedBefore` assignedSym
+            if isDefined (id, entry) scopeTrace symbolStack
             then
                 if isType
                 then return $ Just $ Symb (ResolvedName id (makeAbs name scopeTrace)) m
                 else checkType entry id name scopeTrace
-            else error $ "Use before definition: " ++ name ++ show assignedSym ++ " " ++ show m
+            else error $ "Use before definition: " ++ name ++ " " ++ show (head symbolStack) ++ "" ++ show (M.lookup id (head symbolStack)) ++ " " ++ show m
 
-        findInParentScope = maybe (return Nothing) (\absName -> resolve' name absName originalTrace table assignedSym) (dequalifyName scopeTrace)
+        findInParentScope = maybe (return Nothing) (\absName -> resolve' name absName originalTrace table symbolStack) (dequalifyName scopeTrace)
 
     -- Are we looking for a data constructor and found a type constructor with the same name?
     checkType (EntryType _ _ _ (Just (True, _))) id name absName = resolve (Symb (IDENTIFIER $ name ++ "_C") m) False
     checkType _                                  id name absName = return $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
 
-    -- Axiom: IDs of symbols in value definitions/bindings are in order of their appearence in syntax.
-    -- TODO: Flags every assignment instead of first assignment.
-    -- Sample Code:
-    --  1. a = a + 1 -- Flags correctly since a is defined here.
-    --  2. a = a + 1 -- Flags incorrectly since a is defined above.
-    isDefinedBefore :: (ID, TableEntry) -> Maybe Symbol -> Bool     -- Does the use preceed definition?
-    isDefinedBefore _ Nothing = True
-    isDefinedBefore (rId, entry) (Just (Symb (ResolvedName lId (_:|sTrace)) _)) = getAbs entry /= sTrace || (rId < lId)
+    isDefined :: (ID, TableEntry) -> AbsoluteName -> SymbolStack -> Bool
+    isDefined _ ("Global" :| []) _ = True   -- The symbol being resolved resides in global scope, hence not local.
+    isDefined (id, entry) scopeTrace (top:_) = fromList (getAbs entry) /= scopeTrace || isJust (M.lookup id top)
 
         where
         getAbs entry = case entry of
@@ -346,44 +342,48 @@ resolve (Symb (IDENTIFIER name) m) isType = do
     dequalifyName (_ :| trace) = Just $ fromList trace
 
 -- | Pushes scope into scope stack.
-pushScope :: Symbol -> NameResolver ()
-pushScope (Symb (ResolvedName id name) _) = do
-    s <- getState
-    let (inp, (scopeId, ns, assignedSym), table) = s
-    let absName = getRelative name <| ns
-    setState (inp, (Scope id, absName, assignedSym), table)
+startScope :: Symbol -> NameResolver ()
+startScope name = do
+    push name
+    startLocals
 
 -- | Update current ScopeState to parent scope of caller, and adds definition to table entry.
-popScope :: ProgramElement -> NameResolver ()
-popScope elem = do
+endScope :: ProgramElement -> NameResolver ()
+endScope elem = do
     s <- getState
-    let (inp, (Scope scopeId, n :| ns, assignedSym), table) = s
-    setState (inp, (Scope scopeId, fromList ns, assignedSym), table)
+    let (inp, (Scope scopeId, n :| ns, symbolStack), table) = s
+    setState (inp, (Scope scopeId, fromList ns, symbolStack), table)
     updateScopeId
     scope <- getScope
     updateEntry scopeId $ getEntry elem scope (n :| ns)
+    endLocals
 
     where
     getEntry (Proc paramsTypes retType name _) parentScope absName = EntryProc name absName parentScope (Just (getParamIds paramsTypes, retType))
     getEntry (Func paramsTypes retType name _) parentScope absName = EntryFunc name absName parentScope (Just (getParamIds paramsTypes, retType))
 
+startScopeLambda name = do
+    push name
+    startLocalsUnionTop
+
 -- | Update current ScopeState to parent scope of caller. Only to be used for lambda expressions since their types are not determined yet.
-popScopeLambda = do
+endScopeLambda = do
     s <- getState
-    let (inp, (Scope scopeId, n :| ns, assignedSym), table) = s
-    setState (inp, (Scope scopeId, fromList ns, assignedSym), table)
+    let (inp, (Scope scopeId, n :| ns, symbolStack), table) = s
+    setState (inp, (Scope scopeId, fromList ns, symbolStack), table)
     updateScopeId
+    endLocals
 
 updateScopeId = do
     s <- getState
-    let (inp, (Scope scopeId, ns, assignedSym), (nextId, table)) = s
+    let (inp, (Scope scopeId, ns, symbolStack), (nextId, table)) = s
     let parentScope = case lookupTableEntry scopeId table of
             Just (EntryProc _ _ parentScope _) -> parentScope
             Just (EntryFunc _ _ parentScope _) -> parentScope
             Just (EntryType _ _ parentScope _) -> parentScope
             Just (EntryVar _ _ parentScope _) -> parentScope
             Nothing -> Global
-    setState (inp, (parentScope, ns, assignedSym), (nextId, table))
+    setState (inp, (parentScope, ns, symbolStack), (nextId, table))
 
 defineTypeEntry (Symb (ResolvedName typeId absName) m) sameNameCons consIds = do
     scope <- getScope
@@ -392,6 +392,12 @@ defineTypeEntry (Symb (ResolvedName typeId absName) m) sameNameCons consIds = do
 defineRecordTypeEntry (Symb (ResolvedName typeId absName) m) sameNameCons consId memberIds = do
     scope <- getScope
     updateEntry typeId $ EntryType (Symb (ResolvedName typeId absName) m) absName scope $ Just (sameNameCons, RecType consId memberIds)
+
+push (Symb (ResolvedName id (name:|_)) _) = do
+    s <- getState
+    let (inp, (scopeId, ns, symbolStack), table) = s
+    let absName = name <| ns
+    setState (inp, (Scope id, absName, symbolStack), table)
 
 getScope = do
     s <- getState
@@ -402,8 +408,25 @@ defineValCons (Symb (ResolvedName consId absName) m) typeId paramIds = do
     scope <- getScope
     updateEntry consId $ EntryValCons (Symb (ResolvedName consId absName) m) absName scope $ Just (typeId, paramIds)
 
-setAssigned s = P $ \(inp, (scopeId, absName, _), table) -> Left ((), (inp, (scopeId, absName, Just s), table))
-removeAssigned = P $ \(inp, (scopeId, absName, _), table) -> Left ((), (inp, (scopeId, absName, Nothing), table))
+
+startLocals = P $ \(inp, (scopeId, absName, xs), table) -> Left ((), (inp, (scopeId, absName, f:xs), table))
+    where
+        f :: DefinedSymbols
+        f = M.fromList []
+
+-- | Duplicates the top locals and pushes the copy.
+startLocalsUnionTop = P $ \(inp, (scopeId, absName, x:xs), table) -> Left ((), (inp, (scopeId, absName, x:(x:xs)), table))
+
+endLocals = P $ \(inp, (scopeId, absName, x:xs), table) -> Left ((), (inp, (scopeId, absName, xs), table))
+
+-- | Define in top table.
+defineLocals [] = return ()
+defineLocals (id:rest) = do
+    defineLocal id
+    defineLocals rest
+
+defineLocal id = P $ \(inp, (scopeId, absName, x:xs), table) -> Left ((), (inp, (scopeId, absName, f id x:xs), table))
+    where f id = M.insert id True
 
 -- | Update a variable's type expression to have resolved symbols.
 updateVarType name varType = do
@@ -420,10 +443,11 @@ getParamIds = getSIds $ \(Param s _, _) -> s
 
 getSIds f = fmap $ \x -> symId $ f x
 
-type AssignedSymbol = Maybe Symbol
-type ScopeState = (Scope, AbsoluteName, AssignedSymbol)
+type DefinedSymbols = M.Map ID Bool
+type SymbolStack = [DefinedSymbols]
+type ScopeState = (Scope, AbsoluteName, SymbolStack)
 type State = (Program, ScopeState, TableState)
 type NameResolver a = AbsParser State a
 
 intState :: Program -> TableState -> State
-intState p t = (p, (Global, "Global" :| [], Nothing), t)
+intState p t = (p, (Global, "Global" :| [], []), t)
