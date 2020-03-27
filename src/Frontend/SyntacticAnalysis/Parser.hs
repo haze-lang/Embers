@@ -92,7 +92,7 @@ procedure = do
     params <- formalParam
     procType <- bindParams procType params
     let (boundParams, returnType) = procType
-    boundParams <- defineParameters boundParams
+    boundParams <- mapM defineParameter boundParams
     token (WHITESPACE Newline)
     body <- block
     endScope
@@ -139,7 +139,7 @@ function = do
     params <- formalParam
     funcType <- bindParams funcType params
     let (boundParams, returnType) = funcType
-    boundParams <- defineParameters boundParams
+    boundParams <- mapM defineParameter boundParams
     token EQUALS
     body <- expression
     endScope
@@ -215,14 +215,14 @@ sumType = do
 productType :: Symbol -> Parser ValueCons
 productType typeName = do
     cons <- consIdent
-    cons <- handleSameCons cons typeName
+    cons <- return $ handleSameCons cons typeName
     cons <- defineNameInParent cons Constructor
     operands <- consOperands
     consParams <- defineVirtualParams operands
     return $ ValCons cons consParams
     <|> do
     cons <- consIdent
-    cons <- handleSameCons cons typeName
+    cons <- return $ handleSameCons cons typeName
     let (Symb (ResolvedName typeId _) _) = typeName
     cons <- defineNameInParent cons (NullConstructor typeId)
     return $ ValCons cons []
@@ -232,7 +232,7 @@ productType typeName = do
         operand <- typeIdent <|> typeParam
         operandList <- many restOperands
         return $ operand:operandList
-        
+
         where
         restOperands = token CROSS >> typeIdent <|> typeParam
 
@@ -248,7 +248,7 @@ recordType = do
     typeName <- beginScope typeName Type
     token EQUALS
     cons <- ident
-    cons <- handleSameCons cons typeName
+    cons <- return $ handleSameCons cons typeName
     cons <- defineNameInParent cons Constructor
     token $ WHITESPACE Newline
     members <- some memberDeclaration
@@ -349,7 +349,7 @@ lambdaExpr = procLambdaExpr <|> funcLambdaExpr
     procLambdaExpr = do
         name <- pushScopeLambda Procedure
         params <- formalParam
-        params <- defineLambdaParams (toList params) []
+        params <- mapM defLambdaParam (toList params)
         token DARROW
         many wspace
         do  b <- block
@@ -359,16 +359,13 @@ lambdaExpr = procLambdaExpr <|> funcLambdaExpr
     funcLambdaExpr = do
         name <- pushScopeLambda Function
         params <- formalParam
-        params <- defineLambdaParams (toList params) []
+        params <- mapM defLambdaParam (toList params)
         token DARROW
         do  e <- application <|> expression
             endScope
             return (Lambda $ FuncLambda name (fromList params) e)
 
-    defineLambdaParams [] aux = return aux
-    defineLambdaParams ((Param name c):ps) aux = do
-        name <- defineName name (ExprVal Nothing)
-        defineLambdaParams ps (aux++[(Param name c)])
+    defLambdaParam (Param name c) = defineName name (ExprVal Nothing) >>= \name -> return (Param name c)
 
 tuple :: Parser Expression
 tuple = do
@@ -386,7 +383,9 @@ identifier = do
     return $ Ident name
 
 pattern :: Parser Expression
-pattern = literal <|> tuple
+pattern = literal
+    -- Variables used in pattern will be defined.
+    -- <|> tuple
 
 -- State
 
@@ -417,8 +416,8 @@ validateNames name nameTypeSig = when (symStr name /= symStr nameTypeSig) $
 -- | If Data Constructor has same name as Type, add _C suffix to constructor.
 handleSameCons (Symb (IDENTIFIER cons) m) typeName =
     if cons == symStr typeName
-    then return $ Symb (IDENTIFIER (cons ++ "_C")) m
-    else return $ Symb (IDENTIFIER cons) m
+    then Symb (IDENTIFIER (cons ++ "_C")) m
+    else Symb (IDENTIFIER cons) m
 
 terminator :: Parser Token
 terminator = token SEMICOLON
@@ -501,7 +500,7 @@ bindParams (TArrow (TProd exprList) retType) params = do
             if length ps == 0
             then handleProd (Data.List.NonEmpty.reverse prods) (Data.List.NonEmpty.reverse (p:|ps)) []
             else error "Arrow Operator is binary and maps exactly one parameter."
-        
+
         where
         handleProd :: NonEmpty TypeExpression -> NonEmpty Parameter -> [(Parameter, TypeExpression)] -> Parser [(Parameter, TypeExpression)]
         handleProd t (p:|[]) aux = return $ case t of
@@ -517,7 +516,7 @@ defineVirtualParams = foldlM (\aux x -> do
 
         where
         defineConsParam typeName = do
-            p <- getNextVirtualParam
+            p <- freshVirtualParam
             p <- defineName p $ ExprVal $ Just $ TSymb typeName
             return (p, typeName)
 
@@ -553,9 +552,9 @@ resolve (Symb (IDENTIFIER name) m) = do
         qualifyName (_ :| []) = Nothing
         qualifyName (name :| trace) = Just $ Data.List.NonEmpty.fromList trace
 
-defineParameters = foldlM (\aux (Param name c, t) -> do
+defineParameter (Param name c, t) = do
         p <- defineName name $ ExprVal $ Just t
-        return $ aux ++ [((Param p c), t)]) []
+        return ((Param p c), t)
 
 -- | Defines a name without beginning an attached scope.
 defineName name elem = do
@@ -576,7 +575,7 @@ beginScope (Symb (IDENTIFIER name) m) elem = do
         NullConstructor typeId -> insertEntry $ EntryValCons (Symb (IDENTIFIER name) m) absName scopeId (Just (typeId, []))
         Type -> insertEntry $ EntryType (Symb (IDENTIFIER name) m) absName scopeId Nothing
         ExprVal varType -> insertEntry $ EntryVar (Symb (IDENTIFIER name) m) absName scopeId varType
-    
+
     -- TableState is changed after insertion, so we extract the updated table.
     s <- getState
     let (_, _, _, table, _) = s
@@ -585,10 +584,10 @@ beginScope (Symb (IDENTIFIER name) m) elem = do
 
 pushScopeLambda :: CurrentElement -> Parser Symbol
 pushScopeLambda elem = do
-    lambdaNo <- consumeLambdaNo
+    lambdaNo <- freshLambdaNo
     beginScope (Symb (IDENTIFIER $ "_L" ++ show lambdaNo) (Meta 0 0 "")) elem
-    
-    where consumeLambdaNo = P $ \(inp, scope, (lambdaNo, vp), table, err) -> Left (lambdaNo, (inp, scope, (lambdaNo + 1, vp), table, err))
+
+    where freshLambdaNo = P $ \(inp, scope, (lambdaNo, vp), table, err) -> Left (lambdaNo, (inp, scope, (lambdaNo + 1, vp), table, err))
 
 -- | Pops current scope, updating scope state to point to parent scope.
 endScope :: Parser ()
@@ -597,7 +596,7 @@ endScope = do
     let (inp, (scopeId, (n :| ns)), lambdaNo, table, err) = s
     setState (inp, (scopeId, fromList ns), lambdaNo, table, err)
     updateScopeId
-    
+
     where
     updateScopeId = do
         s <- getState
@@ -611,7 +610,7 @@ endScope = do
             Nothing -> Global
         setState (inp, (parentScope, ns), lambdaNo, (nextId, table), err)
 
-getNextVirtualParam = do
+freshVirtualParam = do
     vpNo <- consumeVirtualParam
     return $ Symb (IDENTIFIER ("_p" ++ show vpNo)) (Meta 0 0 "")
 
@@ -628,7 +627,7 @@ defineNameInParent (Symb (IDENTIFIER name) m) elem = do
         NullConstructor typeId -> insertEntry $ EntryValCons (Symb (IDENTIFIER name) m) absName scopeId (Just (typeId, []))
         Type -> insertEntry $ EntryType (Symb (IDENTIFIER name) m) absName scopeId Nothing
         ExprVal varType -> insertEntry $ EntryVar (Symb (IDENTIFIER name) m) absName scopeId varType
-    
+
     -- TableState is changed after insertion, so we extract the updated table.
     s <- getState
     let (_, _, _, table, _) = s

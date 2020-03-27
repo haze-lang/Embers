@@ -36,7 +36,7 @@ import CompilerUtilities.AbstractParser (AbsParser(P), getState, setState, parse
 
 typeCheck :: Program -> TableState -> (Program, TableState, [Error])
 typeCheck p t = case parse program $! initState p t of
-    Left (p, (_, t, _, err)) -> (p, t, err)
+    Left (p, (_, t, err)) -> (p, t, err)
 
 program = do
     pes <- many programElement
@@ -82,6 +82,7 @@ function (Func ps retType name e) = do
 statements (x:|[]) = do
     x <- statement x
     return [x]
+
 statements (x:|xs) = do
     x <- statement x
     xs <- statements $ fromList xs
@@ -116,16 +117,16 @@ expressionType (Ident (Symb (ResolvedName id absName) _)) = do
         Nothing -> error $ "Inference not supported: " ++ show id
 
 expressionType (Tuple es) = do
-    ts <- f $ toList es
+    ts <- mapM expressionType $ toList es
     return $ TProd (fromList ts)
 
-    where
-    f = foldlM (\aux e -> do
-        t <- expressionType e
-        return $ aux ++ [t]) []
-
 expressionType (Switch e cases def) = error "Switch expression not supported."
-expressionType (Lambda _) = error "Lambda expression not supported."
+
+expressionType (Lambda (FuncLambda name params body)) = do
+    bodyType <- expressionType body
+    error "Lambda expression not supported."
+
+expressionType (Lambda ProcLambda {}) = error "Lambda expression not supported."
 
 expressionType (Conditional condition e1 e2) = do
     cType <- expressionType condition
@@ -171,33 +172,18 @@ assertNominal (TSymb source) target = source `cmpSymb` target
 
 isUnit te = assertNominal te . unitId <$> getTable
 
-cmpSymb (Symb id1 _) (Symb id2 _) = toStr id1 == toStr id2
-
-toStr (IDENTIFIER s) = s
-toStr (ResolvedName _ (s:|_)) = s
+cmpSymb s1 s2 = symStr s1 == symStr s2
 
 type Error = String
-type Status = M.Map ID Bool   -- Keep track of which symbols have been type checked.
 
-type State = (Program, TableState, Status, [Error])
+type State = (Program, TableState, [Error])
 
-initState p t = (p, t, M.fromList [], [])
+initState :: Program -> TableState -> State
+initState p t = (p, t, [])
 
 type TypeChecker a = AbsParser State a
 
-addError message = P $ \(elements, t, c, err) -> Left ((), (elements, t, c, ("Type Error: " ++ message):err))
-
-isTypeChecked :: ID -> TypeChecker Bool
-isTypeChecked id = do
-    s <- getState
-    let (prog, t, statusTable, err) = s
-    case M.lookup id statusTable of
-        Just True -> return True
-        Just False -> return False
-        Nothing -> do
-            let updatedStatus = M.insert id False statusTable
-            setState (prog, t, updatedStatus, err)
-            return False
+addError message = P $ \(elements, t, err) -> Left ((), (elements, t, ("Type Error: " ++ message):err))
 
 -- | Define a symbol's type.
 defineVarType (Symb (ResolvedName id absName) m) varType = do
@@ -209,9 +195,9 @@ defineVarType (Symb (ResolvedName id absName) m) varType = do
 updateEntry :: ID -> TableEntry -> TypeChecker ()
 updateEntry id newEntry = do
     s <- getState
-    let (inp, (nextId, table), c, err) = s
+    let (inp, (nextId, table), err) = s
     table <- maybe empty return (updateTableEntry id newEntry table)
-    setState (inp, (nextId, table), c, err)
+    setState (inp, (nextId, table), err)
 
 lookupType :: ID -> TypeChecker (Maybe TypeExpression)
 lookupType id = do
@@ -242,21 +228,19 @@ lookupType id = do
         paramType <- constructProductType pIds
         return $ Just $ TArrow paramType retType
 
-    constructProductType [x] = do
+    constructProductType [x] = consProdType x
+    constructProductType pIds = do
+        a <- mapM consProdType pIds
+        return $ TProd $ fromList a
+
+    consProdType x = do
         t <- lookupType x
         let (Just t') = t
         return t'
-    constructProductType pIds = constructProductType' pIds []
-
-    constructProductType' [] aux = return $ TProd $ fromList aux
-    constructProductType' (x:xs) aux = do
-        t <- lookupType x
-        let (Just t') = t
-        constructProductType' xs (aux ++ [t'])
 
 getTable :: TypeChecker Table
-getTable = getState >>= \(_, (_, table), _, _) -> return table
+getTable = getState >>= \(_, (_, table), _) -> return table
 
-next = P $ \(Program elements, t, c, err) -> case elements of
-    x:xs -> Left (x, (Program xs, t, c, err))
-    [] -> Right (Program [], t, c, err)
+next = P $ \(Program elements, t, err) -> case elements of
+    x:xs -> Left (x, (Program xs, t, err))
+    [] -> Right (Program [], t, err)
