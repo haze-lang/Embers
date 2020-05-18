@@ -20,6 +20,7 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 module Main where
 
 import System.IO
+import qualified CompilerUtilities.DebugUtil as Debug
 import Frontend.StaticAnalysis.NameResolver (resolveNames)
 import Frontend.SyntacticAnalysis.Parser (parseTokens)
 import Frontend.LexicalAnalysis.Scanner (scan, scanProcessed)
@@ -36,14 +37,14 @@ prompt text = do
 file path = do
     content <- readFile path
     case scanProcessed content of
-        tokens -> pPrint (resolveNames $ parseTokens tokens)
-        -- (_, err) -> lexicalErrors err
+        Right tokens -> pPrint (resolveNames $ parseTokens tokens)
+        Left err -> lexicalErrors err
 
 repl = do
         input <- prompt "Embers>"
         case scanProcessed input of
-            tokens -> pPrint (resolveNames $ parseTokens tokens)
-            -- (tokens, err) -> lexicalErrors err
+            Right tokens -> pPrint (resolveNames $ parseTokens tokens)
+            Left err -> lexicalErrors err
         repl
 
 lexicalErrors :: [String] -> IO ()
@@ -63,8 +64,7 @@ run (Args _ (Just l)) = case l of
     Warranty -> putWarranty
     Conditions -> putConditions
 
-run (Args (Just (FileInput p)) _) = do
-    file p
+run (Args (Just (FileInput p)) _) = file p
 
 run _ = repl
 

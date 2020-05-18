@@ -299,4 +299,5 @@ digit :: Lexer Char
 digit = sat Data.Char.isDigit
 
 scanProcessed str = case scan str of
-    (tokens, []) -> Prelude.filter (not.isSpaceToken) tokens
+    (tokens, []) -> Right $ Prelude.filter (not.isSpaceToken) tokens
+    (_, err) -> Left err

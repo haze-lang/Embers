@@ -19,28 +19,29 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
 module Frontend.TypeSystem.TypeChecker
-(
-    typeCheck
-)
-where
 
-import Data.List.NonEmpty as NE
+where
+-- typeCheck
+
+import Data.List.NonEmpty(NonEmpty((:|)), fromList, toList)
+import qualified Data.List.NonEmpty as NE
 import Control.Applicative (many, empty)
-import Control.Monad (unless, when, void)
+import Control.Monad (unless, when, void, (>=>))
+import Data.Maybe (fromJust)
 import Frontend.AbstractSyntaxTree
 import qualified Data.Map.Strict as M
 import Data.Foldable (foldlM)
 import Frontend.LexicalAnalysis.Token as T
 import CompilerUtilities.ProgramTable
 import CompilerUtilities.AbstractParser (AbsParser(P), getState, setState, parse)
+import Frontend.TypeSystem.Inference.ConstraintGenerator
+import Frontend.TypeSystem.Inference.Unifier
 
 typeCheck :: Program -> TableState -> (Program, TableState, [Error])
 typeCheck p t = case parse program $! initState p t of
     Left (p, (_, t, err)) -> (p, t, err)
 
-program = do
-    pes <- many programElement
-    return $ Program pes
+program = Program <$> many programElement
 
 programElement :: TypeChecker ProgramElement
 programElement = do
@@ -49,16 +50,15 @@ programElement = do
         Ty _ -> return elem
         Proc {} -> procedure elem
         Func {} -> function elem
-        -- ExpressionVar {} -> expr elem -- TODO
+        -- ExpressionVar {} -> tExpr elem -- TODO
 
 procedure (Proc ps retType name stmts) = do
     let initStmts = NE.init stmts
-    unless (null initStmts) $ void $ statements $ fromList $ NE.init stmts
+    unless (null initStmts) $ mapM_ statementType initStmts
 
-    last <- return $ NE.last stmts
-    last <- statement last
+    last <- statementType (NE.last stmts)
     stmts <- case last of
-        Nothing -> do   -- last statement is an assignment
+        Nothing -> do   -- Last statement is an assignment
             isUnitRetType <- isUnit retType
             if isUnitRetType
             then return $ fromList $ toList stmts ++ [unitStmt]
@@ -67,11 +67,13 @@ procedure (Proc ps retType name stmts) = do
                 return stmts
         Just typeExpr -> do
             a <- assertStructural typeExpr retType
-            unless a $ addError $ "Return type in signature is " ++ show retType ++ ", but last statement has type " ++ show typeExpr
+            unless a $ addError $ "Return type in signature is " ++ show retType ++ ", but return statement has type " ++ show typeExpr
             return stmts
     return $ Proc ps retType name stmts
 
-    where unitStmt = StmtExpr $ Lit UNIT
+    where
+    unitStmt = StmtExpr $ Lit UNIT
+    isUnit te = assertNominal te . unitId <$> getTable
 
 function (Func ps retType name e) = do
     t <- expressionType e
@@ -79,16 +81,7 @@ function (Func ps retType name e) = do
     unless a $ error $ "Return type in signature is " ++ show retType ++ ", but expression has type " ++ show t
     return $ Func ps retType name e
 
-statements (x:|[]) = do
-    x <- statement x
-    return [x]
-
-statements (x:|xs) = do
-    x <- statement x
-    xs <- statements $ fromList xs
-    return (x:xs)
-
-statement (Assignment var r) = do
+statementType (Assignment var r) = do
     varType <- lookupType (symId var)
     t <- expressionType r
     case varType of
@@ -98,17 +91,15 @@ statement (Assignment var r) = do
             unless a $ error $ show var ++ " has type " ++ show someType ++ " but a value of " ++ show t ++ " is assigned."
     return Nothing  -- Assignment statement has no type.
 
-statement (StmtExpr e) = do
-    t <- expressionType e
-    return $ Just t
+statementType (StmtExpr e) = Just <$> expressionType e
 
 expressionType :: Expression -> TypeChecker TypeExpression
 expressionType (Lit l) = typeOfLit l
 
     where
-    typeOfLit (T.NUMBER _) = TSymb . intId <$> getTable
-    typeOfLit (T.STRING _) = TSymb . stringId <$> getTable
-    typeOfLit T.UNIT = TSymb . unitId <$> getTable
+    typeOfLit (T.NUMBER _) = TCons . intId <$> getTable
+    typeOfLit (T.STRING _) = TCons . stringId <$> getTable
+    typeOfLit T.UNIT = TCons . unitId <$> getTable
 
 expressionType (Ident (Symb (ResolvedName id absName) _)) = do
     t <- lookupType id
@@ -116,15 +107,14 @@ expressionType (Ident (Symb (ResolvedName id absName) _)) = do
         Just te -> return te
         Nothing -> error $ "Inference not supported: " ++ show id
 
-expressionType (Tuple es) = do
-    ts <- mapM expressionType $ toList es
-    return $ TProd (fromList ts)
+expressionType (Tuple es) = TProd <$> mapM expressionType es
 
 expressionType (Switch e cases def) = error "Switch expression not supported."
 
-expressionType (Lambda (FuncLambda name params body)) = do
-    bodyType <- expressionType body
-    error "Lambda expression not supported."
+expressionType e@(Lambda (FuncLambda name params body)) = do
+    inferType e
+    t <- lookupType (symId name)
+    return $ fromJust t
 
 expressionType (Lambda ProcLambda {}) = error "Lambda expression not supported."
 
@@ -141,22 +131,34 @@ expressionType (Conditional condition e1 e2) = do
 
 expressionType (App l r) = do
     tl <- expressionType l
-    case tl of
-        TArrow {} -> return ()
-        _ -> error "Application only allowed on arrow types."
+    unless (isArrow tl) $ error "Application only allowed on arrow types."
     let (TArrow paramType retType) = tl
     tr <- expressionType r
-    a <- assertStructural tr paramType
-    unless a $ error $ "Expected type " ++ show paramType ++ " but argument supplied has type " ++ show tr
-    return retType
+    if isPolymorphic tl
+    then polymorphicApp l r tl tr
+    else do
+        a <- assertStructural tr paramType
+        unless a $ error $ "Expected type " ++ show paramType ++ " but argument supplied has type " ++ show tr
+        return retType
 
+    where
+    isArrow TArrow {} = True
+    isArrow _ = False
+
+    isPolymorphic te = case te of
+        TVar _ -> True
+        TCons _ -> False
+        TArrow l r -> isPolymorphic l || isPolymorphic r
+        TProd ts -> foldr (\a b -> isPolymorphic a || b) False ts
+
+polymorphicApp l r tl tr = do
+    error $ show tl
+    
 assertStructural (TArrow l1 r1) (TArrow l2 r2) = do
     b1 <- assertStructural l1 l2
     b2 <- assertStructural r1 r2
     return $ b1 && b2
 
-assertStructural (TProd (x:|[])) (TSymb y) = assertStructural x (TSymb y)
-assertStructural (TSymb x) (TProd (y:|[])) = assertStructural (TSymb x) y
 assertStructural (TProd (x:|[])) (TProd (y:|[])) = assertStructural x y
 assertStructural (TProd (_:|_)) (TProd (_:|[])) = return False
 assertStructural (TProd (x:|xs)) (TProd (y:|ys)) = do
@@ -164,38 +166,37 @@ assertStructural (TProd (x:|xs)) (TProd (y:|ys)) = do
     r2 <- assertStructural (TProd $ fromList xs) (TProd $ fromList ys)
     return $ r1 && r2
 
-assertStructural (TSymb l) (TSymb r) = return $ l `cmpSymb` r
+assertStructural (TCons l) (TCons r) = return $ l `cmpSymb` r
+assertStructural (TVar l) (TVar r) = return $ l `cmpSymb` r
 assertStructural _ _ = return False
 
-assertNominal (TProd (TSymb source:|[])) target = source `cmpSymb` target
-assertNominal (TSymb source) target = source `cmpSymb` target
+assertNominal (TProd (TCons source:|[])) target = source `cmpSymb` target
+assertNominal (TCons source) target = source `cmpSymb` target
 
-isUnit te = assertNominal te . unitId <$> getTable
-
-cmpSymb s1 s2 = symStr s1 == symStr s2
+cmpSymb s1 s2 = symId s1 == symId s2
 
 type Error = String
 
-type State = (Program, TableState, [Error])
+type TypeCheckerState = (Program, TableState, [Error])
 
-initState :: Program -> TableState -> State
+initState :: Program -> TableState -> TypeCheckerState
 initState p t = (p, t, [])
 
-type TypeChecker a = AbsParser State a
+type TypeChecker a = AbsParser TypeCheckerState a
 
 addError message = P $ \(elements, t, err) -> Left ((), (elements, t, ("Type Error: " ++ message):err))
 
--- | Define a symbol's type.
+-- | Define a symbol'symbol type.
 defineVarType (Symb (ResolvedName id absName) m) varType = do
     t <- getTable
     let entry = lookupTableEntry id t
-    let (Just (EntryVar name absName s Nothing)) = entry
-    updateEntry id $ EntryVar name absName s (Just varType)
+    let (Just (EntryVar name absName symbol Nothing)) = entry
+    updateEntry id $ EntryVar name absName symbol (Just varType)
 
 updateEntry :: ID -> TableEntry -> TypeChecker ()
 updateEntry id newEntry = do
-    s <- getState
-    let (inp, (nextId, table), err) = s
+    symbol <- getState
+    let (inp, (nextId, table), err) = symbol
     table <- maybe empty return (updateTableEntry id newEntry table)
     setState (inp, (nextId, table), err)
 
@@ -206,10 +207,12 @@ lookupType id = do
         Just entry -> case entry of
             EntryProc _ _ _ (Just (pIds, ret)) -> arrowType pIds ret
             EntryFunc _ _ _ (Just (pIds, ret)) -> arrowType pIds ret
+            EntryLambda _ _ _ pIds (Just ret) -> arrowType pIds ret
             EntryVar _ _ _ (Just t) -> return $ Just t
+            -- EntryTVar t _ _ -> return $ Just $ TVar t
             EntryValCons _ _ _ (Just (retId, pIds)) -> do
                 let (Just retName) = getName retId t
-                let retType = TSymb retName
+                let retType = TCons retName
                 case pIds of
                     [] -> return $ Just retType                 -- Nullary value constructor
                     _ -> arrowType pIds retType
@@ -228,19 +231,62 @@ lookupType id = do
         paramType <- constructProductType pIds
         return $ Just $ TArrow paramType retType
 
-    constructProductType [x] = consProdType x
-    constructProductType pIds = do
-        a <- mapM consProdType pIds
-        return $ TProd $ fromList a
+    constructProductType pIds = case pIds of
+        [x] -> consProdType x
+        _:_ -> TProd . fromList <$> mapM consProdType pIds
 
-    consProdType x = do
-        t <- lookupType x
-        let (Just t') = t
-        return t'
+        where consProdType x = fromJust <$> lookupType x
 
 getTable :: TypeChecker Table
 getTable = getState >>= \(_, (_, table), _) -> return table
 
+getTableState = getState >>= \(_, (id, table), _) -> return (id, table)
+
 next = P $ \(Program elements, t, err) -> case elements of
     x:xs -> Left (x, (Program xs, t, err))
     [] -> Right (Program [], t, err)
+
+inferType :: Expression -> TypeChecker ()
+inferType e = do
+    (nextId, table) <- getTableState
+    context <- toContext
+    let a = generateConstraints e nextId context >>= \(nextId, context, constraints) -> solveConstraints (context, constraints)
+    case a of
+        Right c -> mapM_ updateTable (M.toList c)
+
+    where
+    toContext :: TypeChecker (M.Map Symbol TypeExpression)
+    toContext = do
+        table <- getTable
+        let filtered = M.filter pred table
+        let symbols = map (idToName table) (M.keys filtered)
+        types <- mapM toType symbols
+        return $ M.fromList (zip symbols types)
+
+        where
+        toType symbol = do
+            table <- getTable
+            case fromJust $ M.lookup (symId symbol) table of
+                EntryType {} -> return $ TCons symbol       -- Add primitive types so the inferrer can refer to them since they do not have value constructors.
+                _ -> fromJust <$> lookupType (symId symbol)
+
+        pred entry = case entry of
+            EntryType {} -> True
+            EntryVar _ _ _ Nothing -> False
+            EntryLambda _ _ _ _ Nothing -> False
+            EntryTVar {} -> False
+            _ -> True
+
+    updateTable (symbol, tExpr) = do
+        table <- getTable
+        let entry = fromJust $ M.lookup (symId symbol) table
+        case entry of   -- TODO: Add all polymorphic type variables to Table and set NextID accordingly.
+            EntryVar name absName scope Nothing -> setTable $ M.insert (symId symbol) (EntryVar name absName scope $ Just tExpr) table
+            EntryLambda name absName scope paramIds Nothing -> setTable $ M.insert (symId symbol) (EntryLambda name absName scope paramIds $ Just $ arrowRight tExpr) table
+            _ -> return ()
+        where
+        arrowRight (_ `TArrow` r) = r
+
+        setTable table = do
+            (program, (nextId, _), err) <- getState
+            setState (program, (nextId, table), err)

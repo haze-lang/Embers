@@ -21,14 +21,15 @@ module CompilerUtilities.ProgramTable
 (
     TableEntry (..),
     Scope (..),
-    TableState, ID, AbsoluteName, Table, TypeDef(..),
-    initializeTable, insertTableEntry, updateTableEntry, lookupTableEntry, nameLookup,
+    TableState, ID, NextID, AbsoluteName, Table, TypeDef(..),
+    initializeTable, insertTableEntry, updateTableEntry, lookupTableEntry, idToName, nameLookup,
     boolId, unitId, stringId, intId,
     getRelative
 )
 where
 
 import Data.Map.Strict (Map)
+import Data.Maybe (fromJust)
 import Frontend.AbstractSyntaxTree
 import qualified Data.Map.Strict as M
 import Frontend.LexicalAnalysis.Token
@@ -39,17 +40,19 @@ initializeTable :: TableState
 initializeTable = case parse stdLib (0, M.fromList []) of
     Left (_, state) -> state
 
-type TableState = (NextID, Table)
-type Table = M.Map ID TableEntry
-
 data TableEntry
     = EntryProc Name AbsoluteName Scope (Definition ([ParamId], ReturnType))
     | EntryFunc Name AbsoluteName Scope (Definition ([ParamId], ReturnType))
+    | EntryLambda Name AbsoluteName Scope [ParamId] (Definition ReturnType)
     | EntryValCons Name AbsoluteName Scope (Definition (TypeId, [ParamId]))
     | EntryVar Name AbsoluteName Scope (Definition VarType)
+    | EntryTVar Name AbsoluteName Scope
     | EntryType Name AbsoluteName Scope (Definition (SameNameCons, TypeDef))
     | EntryTypeCons Name AbsoluteName Scope (Definition (SameNameCons, TypeDef))  -- Parametric Types
-    deriving (Show,Eq)
+    deriving (Eq)
+
+type TableState = (NextID, Table)
+type Table = Map ID TableEntry
 
 stdLib = do
     insertUnit
@@ -57,35 +60,42 @@ stdLib = do
     -- insertChar
     insertString
     insertInt
+    -- insertPrint
 
 -- Standard Library Initialization
 
 insertUnit = do
-    typeId <- insertTypeEntry (getSymb "Unit") [] True
-    consId <- insertValConsEntry (getSymb "Unit_C") (typeId, [])
-    updateTableEntry' typeId (EntryType (getSymb "Unit") (getAbs $ getSymb "Unit") Global (Just (True, SType [consId])))
+    typeId <- insertTypeEntry (getSymbIdent "Unit") [] True
+    id <- nextId
+    consId <- insertValConsEntry (getSymb "Unit_C" id) (typeId, [])
+    updateTableEntry' typeId (EntryType (getSymb "Unit" typeId) (getAbs $ getSymbIdent "Unit") Global (Just (True, SType [consId])))
 
 insertBool = do
-    typeId <- insertTypeEntry (getSymb "Bool") [] False
-    consId1 <- insertValConsEntry (getSymb "True") (typeId, [])
-    consId2 <- insertValConsEntry (getSymb "False") (typeId, [])
-    updateTableEntry' typeId (EntryType (getSymb "Bool") (getAbs $ getSymb "Bool") Global (Just (False, SType [consId1, consId2])))
+    typeId <- insertTypeEntry (getSymbIdent "Bool") [] False
+    id <- nextId
+    consId1 <- insertValConsEntry (getSymb "True" id) (typeId, [])
+    id <- nextId
+    consId2 <- insertValConsEntry (getSymb "False" id) (typeId, [])
+    updateTableEntry' typeId (EntryType (getSymb "Bool" typeId) (getAbs $ getSymbIdent "Bool") Global (Just (False, SType [consId1, consId2])))
 
-insertChar = insertTypeEntry (getSymb "Char") [] False
-insertString = insertTypeEntry (getSymb "String") [] False
-insertInt = insertTypeEntry (getSymb "Int") [] False
+insertChar = nextId >>= \id -> insertTypeEntry (getSymb "Char" id) [] False
+insertString = nextId >>= \id -> insertTypeEntry (getSymb "String" id) [] False
+insertInt = nextId >>= \id -> insertTypeEntry (getSymb "Int" id) [] False
+
+insertPrint = nextId >>= \id -> insertProcEntry (getSymb "Print" id)
 
 insertTypeEntry name constructors sameNameCons = insertTableEntry' $ EntryType name (getAbs name) Global (Just (sameNameCons, SType []))
 
-insertVarEntry name varType = insertTableEntry' $ EntryVar name (getAbs name) Global (Just varType)
+insertProcEntry name = insertTableEntry' $ EntryProc name (getAbs name) Global Nothing
 
 insertValConsEntry name varType = insertTableEntry' $ EntryValCons name (getAbs name) Global (Just varType)
 
 getAbs (Symb (IDENTIFIER n) _) = n :| ["Global"]
+getAbs (Symb (ResolvedName _ ns) _) = ns
 
-getSymb name = Symb (IDENTIFIER name) (Meta 0 0 "StandardLibrary.hz")
+getSymb name id = Symb (ResolvedName id (name:|["Global"])) (Meta 0 0 "StandardLibrary.hz")
 
--- getResolvedSymb id name = Symb (ResolvedName id (name:|["Global"])) (Meta 0 0 "StandardLibrary.hz")
+getSymbIdent name = Symb (IDENTIFIER name) (Meta 0 0 "StandardLibrary.hz")
 
 -- Table Manipulation
 
@@ -121,6 +131,16 @@ updateTableEntry id newEntry table = case M.lookup id table of
 lookupTableEntry :: ID -> Table -> Maybe TableEntry
 lookupTableEntry = M.lookup
 
+idToName :: Table -> ID -> Name
+idToName table id = case fromJust $ M.lookup id table of
+    EntryProc n _ _ _ -> n
+    EntryFunc n _ _ _ -> n
+    EntryLambda n _ _ _ _ -> n
+    EntryType n _ _ _ -> n
+    EntryValCons n _ _ _ -> n
+    EntryVar n _ _ _ -> n
+    EntryTVar n _ _ -> n
+
 nameLookup :: AbsoluteName -> Table -> Maybe (ID, TableEntry)
 nameLookup name table = case M.toList $ M.filter (search name) table of
     [x] -> Just x
@@ -132,9 +152,15 @@ nameLookup name table = case M.toList $ M.filter (search name) table of
     search absName entry = case entry of
         EntryProc _ entryName _ _ -> entryName == absName
         EntryFunc _ entryName _ _ -> entryName == absName
+        EntryLambda _ entryName _ _ _ -> entryName == absName
         EntryValCons _ entryName _ _ -> entryName == absName
         EntryType _ entryName _ _ -> entryName == absName
         EntryVar _ entryName _ _ -> entryName == absName
+        EntryTVar _ entryName _ -> entryName == absName
+
+nextId = do
+    (nId, _) <- getState
+    return nId
 
 -- Standard Library Utilities
 
@@ -144,7 +170,7 @@ stringId = f "String"
 intId = f "Int"
 
 f name table = case nameLookup (name:|["Global"]) table of
-    Just (id, EntryType (Symb (IDENTIFIER name) m) absName _ _) -> Symb (ResolvedName id absName) m
+    Just (id, EntryType symb _ _ _) -> symb
     Nothing -> error $ "Standard Library Initialization Error:" ++ name ++ " not found."
 
 -- Helper Types & Aliases
@@ -153,7 +179,7 @@ data Scope
     = Scope ID
     | Global deriving (Eq,Show)
 
-type Definition a = Maybe a
+type Definition = Maybe
 
 data TypeDef
     = RecType ValConsID [FieldID]
@@ -176,3 +202,26 @@ type ParamId = ID
 -- Type Aliases Utilities
 
 getRelative = Data.List.NonEmpty.head
+
+instance Show TableEntry where
+    show (EntryFunc name absName parentScope def) = "Function: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showArrDef def
+    show (EntryProc name absName parentScope def) = "Procedure: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showArrDef def
+    show (EntryLambda name absName parentScope params def) = "Lambda: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showLambda params def
+    show (EntryType name absName parentScope def) = "Type: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showTypeDef def
+    show (EntryValCons name absName parentScope def) = "Value Constructor: " ++ show absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ show def
+    show (EntryVar name absName parentScope def) = "Variable: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showRetType def
+    show (EntryTVar name absName parentScope) = "Type Variable: " ++ showScope absName ++ "\tScope: " ++ show parentScope
+
+showLambda params Nothing = "Parameters: " ++ show params ++ "\tReturn Type: Undefined"
+showLambda params (Just retType) = "Parameters: " ++ show params ++ "\tReturn Type: " ++ show retType
+
+showArrDef Nothing = "Parameters & Return Type: Undefined"
+showArrDef (Just (params, retId)) = "Parameters: " ++ show params ++ "\tReturn Type: " ++ show retId
+
+showTypeDef Nothing = "Aliasing Constructor & Type: Undefined"
+showTypeDef (Just (sameName, tDef)) = "Aliasing Constructor: " ++ show sameName ++ "\tType: " ++ show tDef
+
+showRetType Nothing = "Type: Undefined"
+showRetType (Just typeExpr) = "Type: " ++ show typeExpr
+
+showScope ls = drop 1 $ foldr (\a b -> b ++ "." ++ a) "" ls

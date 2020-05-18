@@ -28,7 +28,7 @@ extra-source-files:
 - README.md
 - ChangeLog.md
 author: Syed Moiz Ur Rehman
-github: syp-lang/Embers
+github: haze-lang/Embers
 license: GPL-3.0-or-later
 executables:
   Embers:
@@ -40,4 +40,4 @@ executables:
     - -with-rtsopts=-N
     dependencies:
     - Embers
-description: Please see the README on GitHub at <https://github.com/syp-lang/Embers#readme>
+description: Please see the README on GitHub at <https://github.com/haze-lang/Embers#readme>

@@ -32,7 +32,7 @@ import qualified Data.Char (isUpper)
 import qualified Data.Map.Strict as M
 import CompilerUtilities.ProgramTable (
     ID, Scope, TableState, Table, AbsoluteName,
-    TableEntry(EntryProc, EntryFunc, EntryValCons, EntryType, EntryVar, EntryTypeCons),
+    TableEntry(EntryProc, EntryFunc, EntryLambda, EntryValCons, EntryType, EntryVar, EntryTypeCons),
     TypeDef(SType, RecType),
     Scope(Scope, Global),
     updateTableEntry, lookupTableEntry, nameLookup, getRelative)
@@ -63,9 +63,8 @@ programElement = do
 procedure :: ProgramElement -> NameResolver ProgramElement
 procedure (Proc paramType retType name body) = do
     startScope name
-    mapM_ defineLocal $ getParamIds paramType
-    procType <- mappingType (paramType, retType)
-    let (paramType, retType) = procType
+    mapM_ defineLocal $ getBoundParamIds paramType
+    (paramType, retType) <- mappingType (paramType, retType)
     body <- block body
     let p = Proc paramType retType name body
     endScope p
@@ -74,9 +73,8 @@ procedure (Proc paramType retType name body) = do
 function :: ProgramElement -> NameResolver ProgramElement
 function (Func paramType retType name body) = do
     startScope name
-    mapM_ defineLocal $ getParamIds paramType
-    funcType <- mappingType (paramType, retType)
-    let (paramType, retType) = funcType
+    mapM_ defineLocal $ getBoundParamIds paramType
+    (paramType, retType) <- mappingType (paramType, retType)
     body <- expression body
     let f = Func paramType retType name body
     endScope f
@@ -96,7 +94,7 @@ _type (SumType (Symb (ResolvedName typeId absName) m) cons) = do
 
     valCons (ValCons name params) = do
         params <- boundParams params
-        let paramIds = getParamIds params
+        let paramIds = getBoundParamIds params
         defineValCons name typeId paramIds
         return (ValCons name params)
 
@@ -109,7 +107,7 @@ _type (Record typeName cons members) = do
     defineRecordTypeEntry typeName sameCons consId memberIds
     let (Symb (ResolvedName typeId _) _) = typeName
     params <- boundParams params
-    let paramIds = getParamIds params
+    let paramIds = getBoundParamIds params
     defineValCons consName typeId paramIds
     let cons = ValCons consName params
     return $ Ty $ Record typeName cons (fromList members)
@@ -119,7 +117,7 @@ _type (Record typeName cons members) = do
 
     member (name, memType) = do
         memType <- resolveName memType
-        updateVarType name (TSymb memType)
+        updateVarType name (TCons memType)
         return (name, memType)
 
 expr :: ProgramElement -> NameResolver ProgramElement
@@ -176,7 +174,7 @@ expression (Lambda (ProcLambda name params body)) = do
     startScopeLambda name
     mapM_ defineLocal $ toList $ fmap (\(Param s _) -> symId s) params
     body <- block body
-    endScopeLambda -- Lambdas will be defined (in table entry) after type inference.
+    endScopeLambda name (toList params) -- Lambdas will be defined (in table entry) after type inference.
     return $ Lambda $ ProcLambda name params body
 
 expression (Lambda (FuncLambda name params body)) = do
@@ -184,7 +182,7 @@ expression (Lambda (FuncLambda name params body)) = do
     mapM_ defineLocal $ toList $ fmap (\(Param s _) -> symId s) params
     body <- expression body
     checkLocals body $ symId name
-    endScopeLambda
+    endScopeLambda name (toList params) -- Lambdas will be defined (in table entry) after type inference.
     return $ Lambda $ FuncLambda name params body
 
 expression (App l arg) = do
@@ -247,12 +245,14 @@ typeExpression (TApp name args) = do
         then resolveName arg
         else return arg
 
-typeExpression (TSymb name) =
+typeExpression (TCons name) =
     if isTypeName name
     then do
         name <- resolveTypeName name
-        return $ TSymb name
-    else return $ TSymb name    -- Type parameters do not need to be resolved.
+        return $ TCons name
+    else return $ TCons name    -- Type parameters do not need to be resolved.
+
+typeExpression t@(TVar v) = return t    -- Type variables are resolved in parser.
 
 typeExpression (TArrow l r) = do
     l <- typeExpression l
@@ -343,19 +343,21 @@ endScope elem = do
     endLocals
 
     where
-    getEntry (Proc paramsTypes retType name _) parentScope absName = EntryProc name absName parentScope (Just (getParamIds paramsTypes, retType))
-    getEntry (Func paramsTypes retType name _) parentScope absName = EntryFunc name absName parentScope (Just (getParamIds paramsTypes, retType))
+    getEntry (Proc paramsTypes retType name _) parentScope absName = EntryProc name absName parentScope (Just (getBoundParamIds paramsTypes, retType))
+    getEntry (Func paramsTypes retType name _) parentScope absName = EntryFunc name absName parentScope (Just (getBoundParamIds paramsTypes, retType))
 
 startScopeLambda name = do
     push name
     startLocalsUnionTop
 
--- | Update current ScopeState to parent scope of caller. Only to be used for lambda expressions since their types are not determined yet.
-endScopeLambda = do
+-- | Update current ScopeState to parent scope of caller. Only to be used for lambda expressions since they have a special entry.
+endScopeLambda name params = do
     s <- getState
     let (inp, (Scope scopeId, n :| ns, symbolStack), table) = s
     setState (inp, (Scope scopeId, fromList ns, symbolStack), table)
     updateScopeId
+    scope <- getScope
+    updateEntry scopeId (EntryLambda name (n:|ns) scope (getParamIds params) Nothing)
     endLocals
 
 updateScopeId = do
@@ -392,7 +394,6 @@ defineValCons (Symb (ResolvedName consId absName) m) typeId paramIds = do
     scope <- getScope
     updateEntry consId $ EntryValCons (Symb (ResolvedName consId absName) m) absName scope $ Just (typeId, paramIds)
 
-
 startLocals = P $ \(inp, (scopeId, absName, xs), table) -> Left ((), (inp, (scopeId, absName, M.empty:xs), table))
 
 -- | Duplicates the top locals and pushes the copy.
@@ -415,7 +416,9 @@ updateEntry id newEntry = do
     table <- maybe (error "Bug") return (updateTableEntry id newEntry table)
     setState (inp, scope, (nid, table))
 
-getParamIds = getSIds $ \(Param s _, _) -> s
+getParamIds = getSIds $ \(Param s _) -> s
+
+getBoundParamIds = getSIds $ \(Param s _, _) -> s
 
 getSIds f = fmap $ \x -> symId $ f x
 

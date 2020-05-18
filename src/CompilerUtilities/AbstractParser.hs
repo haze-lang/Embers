@@ -43,10 +43,9 @@ instance Applicative (AbsParser s) where
 
 instance Monad (AbsParser s) where
     -- p >>= f :: AbsParser a -> (a -> Parer b) -> AbsParser b
-    p >>= f = P(\inp -> case parse p inp of
+    p >>= f = P $ \inp -> case parse p inp of
                     Right m -> Right m
                     Left (v, rest) -> parse (f v) rest
-                )
 
 instance Alternative (AbsParser s) where
     -- empty :: AbsParser a
@@ -61,7 +60,7 @@ parse :: AbsParser s a -> s -> Either (a, s) s
 parse (P p) = p
 
 -- | Extract state from parser.
-getState = P(\state -> Left (state, state))
+getState = P $ \state -> Left (state, state)
 
 -- | Discard current state and set it to given argument.
-setState state = P(\_ -> Left ((), state))
+setState state = P $ const $ Left ((), state)

@@ -22,16 +22,17 @@ module Frontend.AbstractSyntaxTree where
 import Frontend.LexicalAnalysis.Token
 import Data.List.NonEmpty
 
-newtype Program = Program [ProgramElement] deriving (Show,Eq)
+newtype Program = Program [ProgramElement]
+    deriving (Show,Eq)
 
 data ProgramElement
     = Ty Type
-    | Proc BoundParameters TypeExpression Symbol (NonEmpty Statement)
-    | Func BoundParameters TypeExpression Symbol Expression
+    | Proc [BoundParameter] TypeExpression Symbol (NonEmpty Statement)
+    | Func [BoundParameter] TypeExpression Symbol Expression
     | ExpressionVar TypeExpression Symbol Expression
     deriving (Show,Eq)
 
-type BoundParameters = [(Parameter, TypeExpression)]
+type BoundParameter = (Parameter, TypeExpression)
 
 data Statement
     = StmtExpr Expression
@@ -45,13 +46,13 @@ data Type
 type RecordMember = (Symbol, Symbol)
 
 -- Product Type
-data ValueCons = ValCons Symbol BoundParameters deriving (Show,Eq)
+data ValueCons = ValCons Symbol [BoundParameter]
+    deriving (Show,Eq)
 
-data Parameter = Param Symbol CallMode deriving (Show,Eq)
+data Parameter = Param Symbol CallMode
+    deriving (Show,Eq)
 
-data CallMode
-    = ByVal
-    | ByRef
+data CallMode = ByVal | ByRef
     deriving (Show, Eq)
 
 data TypeSignature = TypeSig Symbol TypeExpression deriving (Show,Eq)
@@ -59,7 +60,8 @@ data TypeSignature = TypeSig Symbol TypeExpression deriving (Show,Eq)
 data TypeExpression
     = TArrow TypeExpression TypeExpression
     | TProd (NonEmpty TypeExpression)
-    | TSymb Symbol
+    | TCons Symbol
+    | TVar Symbol
     | TApp Symbol [Symbol]
     deriving Eq
 
@@ -73,12 +75,19 @@ data Expression
     | Lit Literal
     deriving (Show,Eq)
 
-data Symbol = Symb Identifier Metadata deriving Eq
+data Symbol = Symb Identifier Metadata
+    deriving Eq
 
 data LambdaExpression
     = ProcLambda Symbol (NonEmpty Parameter) (NonEmpty Statement)
     | FuncLambda Symbol (NonEmpty Parameter) Expression
     deriving (Show,Eq)
+
+data TypeError
+    = UnificationFail TypeExpression TypeExpression
+    | InfiniteType Identifier TypeExpression
+    | UnboundVariable String
+    deriving Show
 
 -- Utilities
 
@@ -88,17 +97,23 @@ symStr (Symb (ResolvedName _ (x:|_)) _) = x
 symId (Symb (ResolvedName id _) _) = id
 symId (Symb (IDENTIFIER x) _) = error x
 
+getSym name = Symb (IDENTIFIER name) (Meta 0 0 "")
+
+getSymWithId id name = Symb (ResolvedName id (name:|["Global"])) (Meta 0 0 "")
+
 symTrace (Symb (ResolvedName _ scopeTrace) _) = scopeTrace
+
+instance Ord Symbol where
+    s1 `compare` s2 = symId s1 `compare` symId s2
 
 instance Show Symbol where
     show (Symb id m) = show id ++ " at " ++ show m
 
 instance Show TypeExpression where
+    show (TVar v) = show v
     show (TArrow l r) = show l ++ " -> " ++ show r
     show (TProd (x:|[])) = show x
     show (TProd (x:|xs)) =  "(" ++ show x ++ f xs ++ ")"
-        where
-        f [] = ""
-        f (x:xs) = " X " ++ show x ++ f xs
-    show (TSymb (Symb s _)) = show s
+        where f = foldr (\a b -> " X " ++ show a ++ b) ""
+    show (TCons (Symb s _)) = show s
     show (TApp s [ss]) = "TApp " ++ show s ++ " " ++ show ss
