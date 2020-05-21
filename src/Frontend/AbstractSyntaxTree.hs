@@ -83,10 +83,8 @@ data LambdaExpression
     | FuncLambda Symbol (NonEmpty Parameter) Expression
     deriving (Show,Eq)
 
-data TypeError
+data TypeError 
     = UnificationFail TypeExpression TypeExpression
-    | InfiniteType Identifier TypeExpression
-    | UnboundVariable String
     deriving Show
 
 -- Utilities

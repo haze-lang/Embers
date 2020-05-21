@@ -20,11 +20,7 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 module Frontend.SyntacticAnalysis.Parser where
 
 import Frontend.AbstractSyntaxTree
-import CompilerUtilities.ProgramTable (
-    TableEntry(EntryProc, EntryFunc, EntryTVar, EntryValCons, EntryVar, EntryType),
-    Scope(Scope, Global),
-    TableState, Table, ID, AbsoluteName,
-    updateTableEntry, insertTableEntry, lookupTableEntry, initializeTable, nameLookup)
+import CompilerUtilities.ProgramTable
 import CompilerUtilities.AbstractParser
 import Control.Applicative
 import Control.Monad (when)
@@ -493,19 +489,19 @@ bindParams (TArrow (TProd exprList) retType) params = do
             if length ts == 0 && length ps == 0
             then return [(p, t)]
             else error ""
-        TCons _ -> handleProd (Data.List.NonEmpty.reverse (t:|ts)) (Data.List.NonEmpty.reverse (p:|ps)) []
-        TVar _ -> handleProd (Data.List.NonEmpty.reverse (t:|ts)) (Data.List.NonEmpty.reverse (p:|ps)) []
-        TApp _ _ -> handleProd (Data.List.NonEmpty.reverse (t:|ts)) (Data.List.NonEmpty.reverse (p:|ps)) []
+        TCons _ -> handleProd (NE.reverse (t:|ts)) (NE.reverse (p:|ps)) []
+        TVar _ -> handleProd (NE.reverse (t:|ts)) (NE.reverse (p:|ps)) []
+        TApp _ _ -> handleProd (NE.reverse (t:|ts)) (NE.reverse (p:|ps)) []
         TProd prods ->
             if length ps == 0
-            then handleProd (Data.List.NonEmpty.reverse prods) (Data.List.NonEmpty.reverse (p:|ps)) []
+            then handleProd (NE.reverse prods) (NE.reverse (p:|ps)) []
             else error "Arrow Operator is binary and maps exactly one parameter."
 
         where
         handleProd :: NonEmpty TypeExpression -> NonEmpty Parameter -> [(Parameter, TypeExpression)] -> Parser [(Parameter, TypeExpression)]
         handleProd t (p:|[]) aux = return $ case t of
             t:|[] -> (p, t):aux
-            _ -> (p, TProd $ Data.List.NonEmpty.reverse t):aux
+            _ -> (p, TProd $ NE.reverse t):aux
         handleProd (t:|[]) (p:|ps) aux = error "Arrow Operator is binary and maps exactly one parameter."
         handleProd (t:|ts) (p:|ps) aux = handleProd (fromList ts) (fromList ps) ((p, t):aux)
 bindParams (TArrow a b) params = error $ show a ++ show b ++ show params
@@ -549,17 +545,18 @@ resolve :: Symbol -> Parser (Maybe Symbol)
 resolve (Symb (IDENTIFIER name) m) = do
     (_, (_, absName), _, (_, table), _) <- getState
     resolve' name absName absName table
+
     where
-        resolve' :: String -> AbsoluteName -> AbsoluteName -> Table -> Parser (Maybe Symbol)
-        resolve' name absName originalTrace tableState = do
-            case nameLookup (makeAbs name absName) tableState of
-                Just (id, _) -> return $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
-                Nothing -> case qualifyName absName of
-                    Just absName -> resolve' name absName originalTrace tableState
-                    Nothing -> return Nothing                                                   -- Error: Undefined Ref
-        makeAbs = (<|)
-        qualifyName (_ :| []) = Nothing
-        qualifyName (name :| trace) = Just $ Data.List.NonEmpty.fromList trace
+    resolve' :: String -> AbsoluteName -> AbsoluteName -> Table -> Parser (Maybe Symbol)
+    resolve' name absName originalTrace tableState = do
+        case nameLookup (makeAbs name absName) tableState of
+            Just (id, _) -> return $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
+            Nothing -> case qualifyName absName of
+                Just absName -> resolve' name absName originalTrace tableState
+                Nothing -> return Nothing                                                   -- Error: Undefined Ref
+    makeAbs = (<|)
+    qualifyName (_ :| []) = Nothing
+    qualifyName (name :| trace) = Just $ NE.fromList trace
 resolve s = return $ Just s
 
 defineParameter (Param name c, t) = do
@@ -575,17 +572,16 @@ defineName name elem = do
 -- | Defines the name and begins an attached scope.
 beginScope :: Symbol -> CurrentElement -> Parser Symbol
 beginScope (Symb (IDENTIFIER name) m) elem = do
-    s <- getState
-    let (inp, (scopeId, ns), lambdaNo, (id, _), err) = s
+    (inp, (scopeId, ns), lambdaNo, (id, _), err) <- getState
     absName <- return $ name <| ns
-    id <- case elem of
-        Procedure -> insertEntry $ EntryProc (Symb (ResolvedName id absName) m) absName scopeId Nothing
-        Function -> insertEntry $ EntryFunc (Symb (ResolvedName id absName) m) absName scopeId Nothing
-        Constructor -> insertEntry $ EntryValCons (Symb (ResolvedName id absName) m) absName scopeId Nothing
-        NullConstructor typeId -> insertEntry $ EntryValCons (Symb (ResolvedName id absName) m) absName scopeId (Just (typeId, []))
-        Type -> insertEntry $ EntryType (Symb (ResolvedName id absName) m) absName scopeId Nothing
-        ExprVal varType -> insertEntry $ EntryVar (Symb (ResolvedName id absName) m) absName scopeId varType
-        TypeVar -> insertEntry $ EntryTVar (Symb (ResolvedName id absName) m) absName scopeId
+    id <- insertEntry $ case elem of
+        Procedure -> EntryProc (Symb (ResolvedName id absName) m) absName scopeId Nothing
+        Function -> EntryFunc (Symb (ResolvedName id absName) m) absName scopeId Nothing
+        Constructor -> EntryValCons (Symb (ResolvedName id absName) m) absName scopeId Nothing
+        NullConstructor typeId ->  EntryValCons (Symb (ResolvedName id absName) m) absName scopeId (Just (typeId, []))
+        Type -> EntryTCons (Symb (ResolvedName id absName) m) absName scopeId Nothing
+        ExprVal varType -> EntryVar (Symb (ResolvedName id absName) m) absName scopeId varType
+        TypeVar -> EntryTVar (Symb (ResolvedName id absName) m) absName scopeId
 
     -- TableState is changed after insertion, so we extract the updated table.
     (_, _, _, tableState, _) <- getState
@@ -595,15 +591,16 @@ beginScope (Symb (IDENTIFIER name) m) elem = do
 pushScopeLambda :: CurrentElement -> Parser Symbol
 pushScopeLambda elem = do
     lambdaNo <- freshLambdaNo
-    beginScope (Symb (IDENTIFIER $ "_L" ++ show lambdaNo) (Meta 0 0 "")) elem
+    beginScope (getSym $ "_L" ++ show lambdaNo) elem        -- TODO: Metadata is default instead of where the λ expressions starts
 
-    where freshLambdaNo = P $ \(inp, scope, (lambdaNo, vp), table, err) -> Left (lambdaNo, (inp, scope, (lambdaNo + 1, vp), table, err))
+    where
+    freshLambdaNo = P $ \(inp, scope, (lambdaNo, vp), table, err) ->
+        Left (lambdaNo, (inp, scope, (lambdaNo + 1, vp), table, err))
 
 -- | Pops current scope, updating scope state to point to parent scope.
 endScope :: Parser ()
 endScope = do
-    s <- getState
-    let (inp, (scopeId, (n :| ns)), lambdaNo, table, err) = s
+    (inp, (scopeId, (n :| ns)), lambdaNo, table, err) <- getState
     setState (inp, (scopeId, fromList ns), lambdaNo, table, err)
     updateScopeId
 
@@ -615,7 +612,7 @@ endScope = do
             Just (EntryProc _ _ parentScope _) -> parentScope
             Just (EntryFunc _ _ parentScope _) -> parentScope
             Just (EntryValCons _ _ parentScope _) -> parentScope
-            Just (EntryType _ _ parentScope _) -> parentScope
+            Just (EntryTCons _ _ parentScope _) -> parentScope
             Just (EntryVar _ _ parentScope _) -> parentScope
             Just (EntryTVar _ _ parentScope) -> parentScope
             Nothing -> Global
@@ -631,22 +628,21 @@ defineNameInParent (Symb (IDENTIFIER name) m) elem = do
     s <- getState
     let (inp, (scopeId, (n:|ns)), lambdaNo, _, err) = s
     absName <- return $ name :| ns
-    id <- case elem of
-        Procedure -> insertEntry $ EntryProc (Symb (IDENTIFIER name) m) absName scopeId Nothing
-        Function -> insertEntry $ EntryFunc (Symb (IDENTIFIER name) m) absName scopeId Nothing
-        Constructor -> insertEntry $ EntryValCons (Symb (IDENTIFIER name) m) absName scopeId Nothing
-        NullConstructor typeId -> insertEntry $ EntryValCons (Symb (IDENTIFIER name) m) absName scopeId (Just (typeId, []))
-        Type -> insertEntry $ EntryType (Symb (IDENTIFIER name) m) absName scopeId Nothing
-        ExprVal varType -> insertEntry $ EntryVar (Symb (IDENTIFIER name) m) absName scopeId varType
+    id <- insertEntry $ case elem of
+        Procedure -> EntryProc (Symb (IDENTIFIER name) m) absName scopeId Nothing
+        Function -> EntryFunc (Symb (IDENTIFIER name) m) absName scopeId Nothing
+        Constructor -> EntryValCons (Symb (IDENTIFIER name) m) absName scopeId Nothing
+        NullConstructor typeId -> EntryValCons (Symb (IDENTIFIER name) m) absName scopeId (Just (typeId, []))
+        Type -> EntryTCons (Symb (IDENTIFIER name) m) absName scopeId Nothing
+        ExprVal varType -> EntryVar (Symb (IDENTIFIER name) m) absName scopeId varType
 
     -- TableState is changed after insertion, so we extract the updated table.
-    s <- getState
-    let (_, _, _, table, _) = s
+    (_, _, _, table, _) <- getState
     setState (inp, (Scope id, (n:|ns)), lambdaNo, table, err)
     return $ Symb (ResolvedName id absName) m
 
 insertEntry :: TableEntry -> Parser ID
-insertEntry entry = P (\(inp, s, lambdaNo, (id, table), err) ->
+insertEntry entry = P $ \(inp, s, lambdaNo, (id, table), err) ->
     case insertTableEntry id entry table of
         Just t -> Left (id, (inp, s, lambdaNo, (id + 1, t), err))
-        Nothing -> Right (inp, s, lambdaNo, (id, table), err))
+        Nothing -> Right (inp, s, lambdaNo, (id, table), err)

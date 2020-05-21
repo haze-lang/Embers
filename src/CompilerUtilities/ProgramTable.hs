@@ -47,8 +47,7 @@ data TableEntry
     | EntryValCons Name AbsoluteName Scope (Definition (TypeId, [ParamId]))
     | EntryVar Name AbsoluteName Scope (Definition VarType)
     | EntryTVar Name AbsoluteName Scope
-    | EntryType Name AbsoluteName Scope (Definition (SameNameCons, TypeDef))
-    | EntryTypeCons Name AbsoluteName Scope (Definition (SameNameCons, TypeDef))  -- Parametric Types
+    | EntryTCons Name AbsoluteName Scope (Definition (SameNameCons, TypeDef))
     deriving (Eq)
 
 type TableState = (NextID, Table)
@@ -68,7 +67,7 @@ insertUnit = do
     typeId <- insertTypeEntry (getSymbIdent "Unit") [] True
     id <- nextId
     consId <- insertValConsEntry (getSymb "Unit_C" id) (typeId, [])
-    updateTableEntry' typeId (EntryType (getSymb "Unit" typeId) (getAbs $ getSymbIdent "Unit") Global (Just (True, SType [consId])))
+    updateTableEntry' typeId (EntryTCons (getSymb "Unit" typeId) (getAbs $ getSymbIdent "Unit") Global (Just (True, SType [consId])))
 
 insertBool = do
     typeId <- insertTypeEntry (getSymbIdent "Bool") [] False
@@ -76,7 +75,7 @@ insertBool = do
     consId1 <- insertValConsEntry (getSymb "True" id) (typeId, [])
     id <- nextId
     consId2 <- insertValConsEntry (getSymb "False" id) (typeId, [])
-    updateTableEntry' typeId (EntryType (getSymb "Bool" typeId) (getAbs $ getSymbIdent "Bool") Global (Just (False, SType [consId1, consId2])))
+    updateTableEntry' typeId (EntryTCons (getSymb "Bool" typeId) (getAbs $ getSymbIdent "Bool") Global (Just (False, SType [consId1, consId2])))
 
 insertChar = nextId >>= \id -> insertTypeEntry (getSymb "Char" id) [] False
 insertString = nextId >>= \id -> insertTypeEntry (getSymb "String" id) [] False
@@ -84,7 +83,7 @@ insertInt = nextId >>= \id -> insertTypeEntry (getSymb "Int" id) [] False
 
 insertPrint = nextId >>= \id -> insertProcEntry (getSymb "Print" id)
 
-insertTypeEntry name constructors sameNameCons = insertTableEntry' $ EntryType name (getAbs name) Global (Just (sameNameCons, SType []))
+insertTypeEntry name constructors sameNameCons = insertTableEntry' $ EntryTCons name (getAbs name) Global (Just (sameNameCons, SType []))
 
 insertProcEntry name = insertTableEntry' $ EntryProc name (getAbs name) Global Nothing
 
@@ -136,7 +135,7 @@ idToName table id = case fromJust $ M.lookup id table of
     EntryProc n _ _ _ -> n
     EntryFunc n _ _ _ -> n
     EntryLambda n _ _ _ _ -> n
-    EntryType n _ _ _ -> n
+    EntryTCons n _ _ _ -> n
     EntryValCons n _ _ _ -> n
     EntryVar n _ _ _ -> n
     EntryTVar n _ _ -> n
@@ -154,7 +153,7 @@ nameLookup name table = case M.toList $ M.filter (search name) table of
         EntryFunc _ entryName _ _ -> entryName == absName
         EntryLambda _ entryName _ _ _ -> entryName == absName
         EntryValCons _ entryName _ _ -> entryName == absName
-        EntryType _ entryName _ _ -> entryName == absName
+        EntryTCons _ entryName _ _ -> entryName == absName
         EntryVar _ entryName _ _ -> entryName == absName
         EntryTVar _ entryName _ -> entryName == absName
 
@@ -170,7 +169,7 @@ stringId = f "String"
 intId = f "Int"
 
 f name table = case nameLookup (name:|["Global"]) table of
-    Just (id, EntryType symb _ _ _) -> symb
+    Just (id, EntryTCons symb _ _ _) -> symb
     Nothing -> error $ "Standard Library Initialization Error:" ++ name ++ " not found."
 
 -- Helper Types & Aliases
@@ -207,7 +206,7 @@ instance Show TableEntry where
     show (EntryFunc name absName parentScope def) = "Function: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showArrDef def
     show (EntryProc name absName parentScope def) = "Procedure: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showArrDef def
     show (EntryLambda name absName parentScope params def) = "Lambda: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showLambda params def
-    show (EntryType name absName parentScope def) = "Type: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showTypeDef def
+    show (EntryTCons name absName parentScope def) = "Type: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showTypeDef def
     show (EntryValCons name absName parentScope def) = "Value Constructor: " ++ show absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ show def
     show (EntryVar name absName parentScope def) = "Variable: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showRetType def
     show (EntryTVar name absName parentScope) = "Type Variable: " ++ showScope absName ++ "\tScope: " ++ show parentScope

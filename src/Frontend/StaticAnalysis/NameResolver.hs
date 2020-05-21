@@ -30,12 +30,7 @@ import CompilerUtilities.AbstractParser
 import Frontend.LexicalAnalysis.Token
 import qualified Data.Char (isUpper)
 import qualified Data.Map.Strict as M
-import CompilerUtilities.ProgramTable (
-    ID, Scope, TableState, Table, AbsoluteName,
-    TableEntry(EntryProc, EntryFunc, EntryLambda, EntryValCons, EntryType, EntryVar, EntryTypeCons),
-    TypeDef(SType, RecType),
-    Scope(Scope, Global),
-    updateTableEntry, lookupTableEntry, nameLookup, getRelative)
+import CompilerUtilities.ProgramTable
 import qualified Frontend.SyntacticAnalysis.Parser as P
 import Frontend.AbstractSyntaxTree
 import Data.List.NonEmpty (NonEmpty((:|)), (<|), fromList, toList, map)
@@ -306,7 +301,7 @@ resolve (Symb (IDENTIFIER name) m) isType = do
         findInParentScope = maybe (return Nothing) (\absName -> resolve' name absName originalTrace table symbolStack) (dequalifyName scopeTrace)
 
     -- Are we looking for a data constructor and found a type constructor with the same name?
-    checkType (EntryType _ _ _ (Just (True, _))) id name absName = resolve (Symb (IDENTIFIER $ name ++ "_C") m) False
+    checkType (EntryTCons _ _ _ (Just (True, _))) id name absName = resolve (Symb (IDENTIFIER $ name ++ "_C") m) False
     checkType _                                  id name absName = return $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
 
     isDefined :: (ID, TableEntry) -> AbsoluteName -> SymbolStack -> Bool
@@ -317,7 +312,7 @@ resolve (Symb (IDENTIFIER name) m) isType = do
         getAbs entry = case entry of
             EntryProc _ (_:|entryName) _ _ -> entryName
             EntryFunc _ (_:|entryName) _ _ -> entryName
-            EntryType _ (_:|entryName) _ _ -> entryName
+            EntryTCons _ (_:|entryName) _ _ -> entryName
             EntryVar _ (_:|entryName) _ _ -> entryName
             EntryValCons _ (_:|entryName) _ _ -> entryName
 
@@ -366,18 +361,18 @@ updateScopeId = do
     let parentScope = case lookupTableEntry scopeId table of
             Just (EntryProc _ _ parentScope _) -> parentScope
             Just (EntryFunc _ _ parentScope _) -> parentScope
-            Just (EntryType _ _ parentScope _) -> parentScope
+            Just (EntryTCons _ _ parentScope _) -> parentScope
             Just (EntryVar _ _ parentScope _) -> parentScope
             Nothing -> Global
     setState (inp, (parentScope, ns, symbolStack), (nextId, table))
 
 defineTypeEntry (Symb (ResolvedName typeId absName) m) sameNameCons consIds = do
     scope <- getScope
-    updateEntry typeId $ EntryType (Symb (ResolvedName typeId absName) m) absName scope $ Just (sameNameCons, SType consIds)
+    updateEntry typeId $ EntryTCons (Symb (ResolvedName typeId absName) m) absName scope $ Just (sameNameCons, SType consIds)
 
 defineRecordTypeEntry (Symb (ResolvedName typeId absName) m) sameNameCons consId memberIds = do
     scope <- getScope
-    updateEntry typeId $ EntryType (Symb (ResolvedName typeId absName) m) absName scope $ Just (sameNameCons, RecType consId memberIds)
+    updateEntry typeId $ EntryTCons (Symb (ResolvedName typeId absName) m) absName scope $ Just (sameNameCons, RecType consId memberIds)
 
 push (Symb (ResolvedName id (name:|_)) _) = do
     s <- getState

@@ -19,9 +19,10 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
 module Frontend.TypeSystem.TypeChecker
-
+-- (
+    -- typeCheck
+-- )
 where
--- typeCheck
 
 import Data.List.NonEmpty(NonEmpty((:|)), fromList, toList)
 import qualified Data.List.NonEmpty as NE
@@ -53,8 +54,7 @@ programElement = do
         -- ExpressionVar {} -> tExpr elem -- TODO
 
 procedure (Proc ps retType name stmts) = do
-    let initStmts = NE.init stmts
-    unless (null initStmts) $ mapM_ statementType initStmts
+    mapM_ statementType $ NE.init stmts
 
     last <- statementType (NE.last stmts)
     stmts <- case last of
@@ -111,12 +111,16 @@ expressionType (Tuple es) = TProd <$> mapM expressionType es
 
 expressionType (Switch e cases def) = error "Switch expression not supported."
 
-expressionType e@(Lambda (FuncLambda name params body)) = do
+expressionType e@(Lambda (FuncLambda name _ _)) = do
     inferType e
     t <- lookupType (symId name)
     return $ fromJust t
 
-expressionType (Lambda ProcLambda {}) = error "Lambda expression not supported."
+expressionType e@(Lambda (ProcLambda name _ _)) = do
+    inferType e
+    t <- lookupType (symId name)
+    return $ fromJust t
+    -- error "Lambda expression not supported."
 
 expressionType (Conditional condition e1 e2) = do
     cType <- expressionType condition
@@ -216,7 +220,7 @@ lookupType id = do
                 case pIds of
                     [] -> return $ Just retType                 -- Nullary value constructor
                     _ -> arrowType pIds retType
-            EntryType {} -> error $ "Expected value, but " ++ show id ++ " is a type."
+            EntryTCons {} -> error $ "Expected value, but " ++ show id ++ " is a type."
             _ -> return Nothing
         Nothing -> error $ "Bug: Unresolved symbol found: " ++ show id
 
@@ -224,7 +228,7 @@ lookupType id = do
     getName id table = do
         e <- lookupTableEntry id table
         case e of
-            EntryType name _ _ _ -> return name
+            EntryTCons name _ _ _ -> return name
             _ -> error $ "Bug: getName called on entry of a non-type element. " ++ show id
 
     arrowType pIds retType = do
@@ -250,9 +254,15 @@ inferType :: Expression -> TypeChecker ()
 inferType e = do
     (nextId, table) <- getTableState
     context <- toContext
-    let a = generateConstraints e nextId context >>= \(nextId, context, constraints) -> solveConstraints (context, constraints)
-    case a of
-        Right c -> mapM_ updateTable (M.toList c)
+    let inferResult = do
+        (nextId, context, constraints) <- generateConstraints e nextId context
+        solution <- solveConstraints (context, constraints)
+        return (solution, nextId)
+    case inferResult of
+        Right (context, nextId) -> do
+            mapM_ updateTable (M.toList context)
+            setNextId nextId
+        Left err -> error $ show err
 
     where
     toContext :: TypeChecker (M.Map Symbol TypeExpression)
@@ -267,15 +277,17 @@ inferType e = do
         toType symbol = do
             table <- getTable
             case fromJust $ M.lookup (symId symbol) table of
-                EntryType {} -> return $ TCons symbol       -- Add primitive types so the inferrer can refer to them since they do not have value constructors.
+                EntryTCons {} -> return $ TCons symbol       -- Add primitive types so the inferrer can refer to them since they do not have value constructors.
                 _ -> fromJust <$> lookupType (symId symbol)
 
         pred entry = case entry of
-            EntryType {} -> True
+            EntryTCons {} -> True
             EntryVar _ _ _ Nothing -> False
             EntryLambda _ _ _ _ Nothing -> False
             EntryTVar {} -> False
             _ -> True
+
+    setNextId nextId = getState >>= \(program, (_, table), err) -> setState (program, (nextId, table), err)
 
     updateTable (symbol, tExpr) = do
         table <- getTable

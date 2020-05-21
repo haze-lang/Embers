@@ -9,6 +9,7 @@ import CompilerUtilities.ProgramTable
 import Frontend.LexicalAnalysis.Token (Literal(NUMBER, STRING), Identifier(IDENTIFIER))
 import Data.List.NonEmpty (NonEmpty((:|)))
 import qualified Data.List.NonEmpty as NE
+import Control.Monad.Extra (concatMapM)
 import Control.Monad.Except
 import Control.Monad.State
 import Debug.Trace (trace)
@@ -28,7 +29,7 @@ solve = do
     constraint <- popConstraint
     case constraint of
         Just (Constraint (l, r)) -> do
-            let simplifiedConstraints = simplify (l, r)
+            simplifiedConstraints <- simplify (l, r)
             mapM_ substitute simplifiedConstraints
             solve
         Nothing -> annotate
@@ -66,15 +67,18 @@ annotate = do
     isTypeVar (TVar _) = True
     isTypeVar _ = False
 
-simplify :: (TypeExpression, TypeExpression) -> [(TypeExpression, TypeExpression)]
-simplify (l1 `TArrow` r1, l2 `TArrow` r2) = simplify (l1, l2) ++ simplify (r1, r2)
+simplify :: (TypeExpression, TypeExpression) -> Solve [(TypeExpression, TypeExpression)]
+simplify (l1 `TArrow` r1, l2 `TArrow` r2) = do
+    s1 <- simplify (l1, l2)
+    s2 <- simplify (r1, r2)
+    return $ s1 ++ s2
 simplify (TProd (x:|[]), b) = simplify (x, b)
 simplify (a, TProd (x:|[])) = simplify (a, x)
-simplify (TProd as, TProd bs) = concatMap simplify (NE.zip as bs)
-simplify (a@(TVar v1), b@(TVar v2)) = [(a, b)]
-simplify (a, b@(TVar v)) = [(b, a)]
-simplify (TCons a, TCons b) = if symId a == symId b then [] else error $ show a ++ "\n" ++ show b
-simplify (a, b) = [(a, b)]
+simplify (TProd as, TProd bs) = concatMapM simplify (NE.toList $ NE.zip as bs)
+simplify (a@(TVar v1), b@(TVar v2)) = return [(a, b)]
+simplify (a, b@(TVar v)) = return [(b, a)]
+simplify (TCons a, TCons b) = if symId a == symId b then return [] else throwError $ UnificationFail (TCons a) (TCons b)
+simplify (a, b) = return [(a, b)]
 
 substitute :: (TypeExpression, TypeExpression) -> Solve ()
 substitute (l, r) = do
