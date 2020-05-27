@@ -23,7 +23,7 @@ module CompilerUtilities.ProgramTable
     Scope (..),
     TableState, ID, NextID, AbsoluteName, Table, TypeDef(..),
     initializeTable, insertTableEntry, updateTableEntry, lookupTableEntry, idToName, nameLookup,
-    boolId, unitId, stringId, intId,
+    boolId, unitId, stringId, intId, charId,
     getRelative
 )
 where
@@ -56,7 +56,7 @@ type Table = Map ID TableEntry
 stdLib = do
     insertUnit
     insertBool
-    -- insertChar
+    insertChar
     insertString
     insertInt
     -- insertPrint
@@ -167,6 +167,7 @@ boolId = f "Bool"
 unitId = f "Unit"
 stringId = f "String"
 intId = f "Int"
+charId = f "Char"
 
 f name table = case nameLookup (name:|["Global"]) table of
     Just (id, EntryTCons symb _ _ _) -> symb

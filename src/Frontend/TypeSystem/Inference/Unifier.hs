@@ -7,6 +7,7 @@ where
 import Frontend.AbstractSyntaxTree
 import CompilerUtilities.ProgramTable
 import Frontend.LexicalAnalysis.Token (Literal(NUMBER, STRING), Identifier(IDENTIFIER))
+import Data.Tuple.Extra (snd3, thd3)
 import Data.List.NonEmpty (NonEmpty((:|)))
 import qualified Data.List.NonEmpty as NE
 import Control.Monad.Extra (concatMapM)
@@ -24,7 +25,7 @@ solveConstraints s = case evalState (runExceptT solve) (initState s) of
     Left err -> Left err
     Right (Context c) -> Right c
 
-solve :: Solve Context
+solve :: Unifier Context
 solve = do
     constraint <- popConstraint
     case constraint of
@@ -35,7 +36,7 @@ solve = do
         Nothing -> annotate
 
 -- | Apply mapping to type variables in context.
-annotate :: Solve Context
+annotate :: Unifier Context
 annotate = do
     s <- get
     let (c@(Context context), _, mapping) = s
@@ -51,7 +52,7 @@ annotate = do
     
     let newContext = M.map (\t@(TVar tv) -> fromMaybe t (M.lookup tv mapping)) varContext
 
-    return $ Context $ M.union newContext context
+    pure $ Context $ M.union newContext context
 
     where
     -- | Get all elements mapping bound variables to type variables.
@@ -67,20 +68,20 @@ annotate = do
     isTypeVar (TVar _) = True
     isTypeVar _ = False
 
-simplify :: (TypeExpression, TypeExpression) -> Solve [(TypeExpression, TypeExpression)]
+simplify :: (TypeExpression, TypeExpression) -> Unifier [(TypeExpression, TypeExpression)]
 simplify (l1 `TArrow` r1, l2 `TArrow` r2) = do
     s1 <- simplify (l1, l2)
     s2 <- simplify (r1, r2)
-    return $ s1 ++ s2
+    pure $ s1 ++ s2
 simplify (TProd (x:|[]), b) = simplify (x, b)
 simplify (a, TProd (x:|[])) = simplify (a, x)
 simplify (TProd as, TProd bs) = concatMapM simplify (NE.toList $ NE.zip as bs)
-simplify (a@(TVar v1), b@(TVar v2)) = return [(a, b)]
-simplify (a, b@(TVar v)) = return [(b, a)]
-simplify (TCons a, TCons b) = if symId a == symId b then return [] else throwError $ UnificationFail (TCons a) (TCons b)
-simplify (a, b) = return [(a, b)]
+simplify (a@(TVar v1), b@(TVar v2)) = pure [(a, b)]
+simplify (a, b@(TVar v)) = pure [(b, a)]
+simplify (TCons a, TCons b) = if symId a == symId b then pure [] else throwError $ UnificationFail (TCons a) (TCons b)
+simplify (a, b) = pure [(a, b)]
 
-substitute :: (TypeExpression, TypeExpression) -> Solve ()
+substitute :: (TypeExpression, TypeExpression) -> Unifier ()
 substitute (l, r) = do
     -- Substitute l with r everywhere in remaining constraints
     constraints <- getConstraints
@@ -92,12 +93,12 @@ substitute (l, r) = do
     addMapping (l, r)
 
     where
-    updateConstraints :: [Constraint] -> Solve ()
+    updateConstraints :: [Constraint] -> Unifier ()
     updateConstraints cs = do
         (cxt, conts, m) <- get
         put (cxt, cs, m)
 
-    substituteConstraint (Constraint (l1, r1)) = return $ Constraint (subs (tVar l, r) l1, subs (tVar l, r) r1)
+    substituteConstraint (Constraint (l1, r1)) = pure $ Constraint (subs (tVar l, r) l1, subs (tVar l, r) r1)
 
 -- Substitute l with r in mappings.
 substituteMapping (l, r) = do
@@ -113,35 +114,35 @@ subs (var, newType) (l `TArrow` r) = subs (var, newType) l `TArrow` subs (var, n
 subs (var, newType) (TProd ts) = TProd (NE.map (subs (var, newType)) ts)
 subs _ (TCons n) = TCons n
 
--- | Constraint solver monad
-type Solve a = ExceptT TypeError (State SolveState) a
+type Unifier a = ExceptT TypeError (State SolveState) a
 
 type SolveState = (Context, [Constraint], Mapping)
 type Mapping = M.Map TypeVar TypeExpression
 
-addMapping :: (TypeExpression, TypeExpression) -> Solve ()
+addMapping :: (TypeExpression, TypeExpression) -> Unifier ()
 addMapping (TVar v, t) = do
     (context, constraints, mapping) <- get
     let m = M.insert v t mapping
     put (context, constraints, m)
+addMapping (t1, t2) = throwError $ UnificationFail t1 t2
 
-updateMapping :: Mapping -> Solve ()
+updateMapping :: Mapping -> Unifier ()
 updateMapping m = do
     (cxt, conts, _) <- get
     put (cxt, conts, m)
 
-popConstraint :: Solve (Maybe Constraint)
+popConstraint :: Unifier (Maybe Constraint)
 popConstraint = do
     (context, cs, m) <- get
     case cs of
-        [] -> return Nothing
-        x:xs -> put (context, xs, m) >> return (Just x)
+        [] -> pure Nothing
+        x:xs -> put (context, xs, m) >> pure (Just x)
 
-getMapping :: Solve Mapping
-getMapping = gets $ \(_, _, m) -> m
+getMapping :: Unifier Mapping
+getMapping = gets thd3
 
-getConstraints :: Solve [Constraint]
-getConstraints = gets $ \(_, constraints, _) -> constraints
+getConstraints :: Unifier [Constraint]
+getConstraints = gets snd3
 
 initState (context, constraints) = (Context context, constraints, M.empty)
 

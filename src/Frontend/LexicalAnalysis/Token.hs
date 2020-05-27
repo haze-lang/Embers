@@ -58,7 +58,7 @@ incLine (Meta c l f) = Meta 1 (l + 1) f
 data StrSource = Str String Metadata deriving Show
 
 instance Show Identifier where
-    show (IDENTIFIER s) = s
+    show (IDENTIFIER s) = s ++ "<>"
     show (ResolvedName id (s:|_)) = s ++ "<" ++ show id ++ ">"
 
 instance Show Metadata where

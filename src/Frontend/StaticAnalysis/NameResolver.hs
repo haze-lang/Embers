@@ -33,7 +33,7 @@ import qualified Data.Map.Strict as M
 import CompilerUtilities.ProgramTable
 import qualified Frontend.SyntacticAnalysis.Parser as P
 import Frontend.AbstractSyntaxTree
-import Data.List.NonEmpty (NonEmpty((:|)), (<|), fromList, toList, map)
+import Data.List.NonEmpty as NE (NonEmpty((:|)), (<|), fromList, toList, map)
 import Data.Foldable (foldlM)
 
 resolveNames :: (Program, TableState) -> (Program, TableState)
@@ -44,7 +44,7 @@ resolveNames (p, t) = case parse program (intState p t) of
 program :: NameResolver Program  
 program = do
     elements <- many programElement
-    return $ Program elements
+    pure $ Program elements
 
 programElement :: NameResolver ProgramElement
 programElement = do
@@ -63,7 +63,7 @@ procedure (Proc paramType retType name body) = do
     body <- block body
     let p = Proc paramType retType name body
     endScope p
-    return p
+    pure p
 
 function :: ProgramElement -> NameResolver ProgramElement
 function (Func paramType retType name body) = do
@@ -73,7 +73,7 @@ function (Func paramType retType name body) = do
     body <- expression body
     let f = Func paramType retType name body
     endScope f
-    return f
+    pure f
 
 _type :: Type -> NameResolver ProgramElement
 _type (SumType (Symb (ResolvedName typeId absName) m) cons) = do
@@ -81,7 +81,7 @@ _type (SumType (Symb (ResolvedName typeId absName) m) cons) = do
     let sameCons = isSameConsName (getRelative absName) cons
     let consIds = getIds cons
     defineTypeEntry (Symb (ResolvedName typeId absName) m) sameCons consIds
-    return $ Ty $ SumType (Symb (ResolvedName typeId absName) m) (fromList cons)
+    pure $ Ty $ SumType (Symb (ResolvedName typeId absName) m) (fromList cons)
 
     where
     getIds = getSIds $ \(ValCons cons _) -> cons
@@ -91,7 +91,7 @@ _type (SumType (Symb (ResolvedName typeId absName) m) cons) = do
         params <- boundParams params
         let paramIds = getBoundParamIds params
         defineValCons name typeId paramIds
-        return (ValCons name params)
+        pure (ValCons name params)
 
 _type (Record typeName cons members) = do
     let (ValCons consName params) = cons
@@ -105,85 +105,91 @@ _type (Record typeName cons members) = do
     let paramIds = getBoundParamIds params
     defineValCons consName typeId paramIds
     let cons = ValCons consName params
-    return $ Ty $ Record typeName cons (fromList members)
+    pure $ Ty $ Record typeName cons (fromList members)
 
     where
-    getMemberIds =  getSIds fst
+    getMemberIds = getSIds fst
 
     member (name, memType) = do
         memType <- resolveName memType
         updateVarType name (TCons memType)
-        return (name, memType)
+        pure (name, memType)
 
 expr :: ProgramElement -> NameResolver ProgramElement
 expr (ExpressionVar t name e) = do
     t <- typeExpression t
     e <- expression e
-    return $ ExpressionVar t name e
+    pure $ ExpressionVar t name e
 
 block :: NonEmpty Statement -> NameResolver (NonEmpty Statement)
-block stmts = do
-    stmts <- mapM statement (toList stmts)
-    return $ fromList stmts
+block stmts = fromList <$> mapM statement (toList stmts)
 
 statement :: Statement -> NameResolver Statement
 statement (Assignment l r) = do
     -- Every symbol on right side of assignment must have been defined before.
     r <- expression r
     defineLocal (symId l)
-    return $ Assignment l r
+    pure $ Assignment l r
 
-statement (StmtExpr e) = do
-    e <- expression e
-    return $ StmtExpr e
+statement (StmtExpr e) = StmtExpr <$> expression e
 
 expression :: Expression -> NameResolver Expression
-expression (Lit lit) = return $ Lit lit
-expression (Ident id) = do
-    id <- resolveName id
-    return $ Ident id
+expression (Lit lit) = pure $ Lit lit
+expression (Ident id) = Ident <$> resolveName id
 
 expression (Tuple (e:|es)) = do
     e <- expression e
     es <- mapM expression es
-    return $ Tuple (e:|es)
+    pure $ Tuple (e:|es)
 
 expression (Conditional cond e1 e2) = do
     cond <- expression cond
     e1 <- expression e1
     e2 <- expression e2
-    return $ Conditional cond e1 e2
+    pure $ Conditional cond e1 e2
 
-expression (Switch switch cs def) = do
-    switch <- expression switch
-    cs <- do
-        cs <- mapM _case (toList cs)
-        return $ fromList cs
+expression (Switch e cases def) = do
+    e <- expression e
+    cases <- mapM _case cases
     def <- expression def
-    return $ Switch switch cs def
+    pure $ Switch e cases def
 
-    where _case (p, e) = expression e >>= \e -> return (p, e)
+    where
+    _case (p, e) = do
+        p <- _pattern p
+        e <- expression e
+        pure (p, e)
+
+    _pattern p = case p of
+        Lit _ -> expression p
+        Ident s -> expression p
+        Tuple es -> defineLocals es >> expression p
+        App cons args -> case args of
+            Ident s -> defineLocal (symId s) >> expression p
+            Tuple es -> defineLocals es >> expression p
+
+        where defineLocals es = mapM_ defineLocal (NE.map (\(Ident s) -> symId s) es)
 
 -- Lambda expressions must not reference symbols defined after them.
 expression (Lambda (ProcLambda name params body)) = do
     startScopeLambda name
-    mapM_ defineLocal $ toList $ fmap (\(Param s _) -> symId s) params
+    mapM_ defineLocal $ fmap (\(Param s _) -> symId s) params
     body <- block body
     endScopeLambda name (toList params) -- Lambdas will be defined (in table entry) after type inference.
-    return $ Lambda $ ProcLambda name params body
+    pure $ Lambda $ ProcLambda name params body
 
 expression (Lambda (FuncLambda name params body)) = do
     startScopeLambda name
-    mapM_ defineLocal $ toList $ fmap (\(Param s _) -> symId s) params
+    mapM_ defineLocal $ fmap (\(Param s _) -> symId s) params
     body <- expression body
     checkLocals body $ symId name
     endScopeLambda name (toList params) -- Lambdas will be defined (in table entry) after type inference.
-    return $ Lambda $ FuncLambda name params body
+    pure $ Lambda $ FuncLambda name params body
 
 expression (App l arg) = do
     l <- expression l
     arg <- expression arg
-    return $ App l arg
+    pure $ App l arg
 
 -- | Ensure that all variables referenced inside pure lambda expressions are defined inside the lambda.
 checkLocals e lambdaId = case e of
@@ -195,27 +201,24 @@ checkLocals e lambdaId = case e of
     Tuple (x:|xs) -> checkLocals x lambdaId >> checkLocals (Tuple $ fromList xs) lambdaId
     Conditional e1 e2 e3 -> checkLocals e1 lambdaId >> checkLocals e2 lambdaId >> checkLocals e3 lambdaId
     App l r -> checkLocals l lambdaId >> checkLocals r lambdaId
-    Lit _ -> return ()
-    Lambda _ -> return ()   -- Lambda expressions will be checked on their own turn.
+    Lit _ -> pure ()
+    Lambda _ -> pure ()   -- Lambda expressions will be checked on their own turn.
     Ident name -> do
-        s <- getState
-        let (_, _, (_, table)) = s
+        (_, _, (_, table)) <- getState
         let symbol = lookupTableEntry (symId name) table
         maybe (error $ "Unresolved symbol: " ++ show name) checkLocalDefine symbol
 
     where
     checkLocalDefine (EntryVar _ _ (Scope varParentId) _) = when (lambdaId /= varParentId) $ error "Functions cannot refer to outside variables."
-    checkLocalDefine _ = return ()
+    checkLocalDefine _ = pure ()
 
-    caseCheck (e1, e2) = do
-        checkLocals e1 lambdaId
-        checkLocals e2 lambdaId
+    caseCheck (e1, e2) = checkLocals e1 lambdaId >> checkLocals e2 lambdaId
 
 mappingType :: ([(Parameter, TypeExpression)], TypeExpression) -> NameResolver ([(Parameter, TypeExpression)], TypeExpression)
 mappingType (ps, retType) = do
     ps <- boundParams ps
     retType <- typeExpression retType
-    return (ps, retType)
+    pure (ps, retType)
 
 boundParams :: [(Parameter, TypeExpression)] -> NameResolver [(Parameter, TypeExpression)]
 boundParams = mapM boundParam
@@ -224,7 +227,7 @@ boundParams = mapM boundParam
     boundParam (Param name callMode, typeExpr) = do
         typeExpr <- typeExpression typeExpr
         updateVarType name typeExpr
-        return (Param name callMode, typeExpr)
+        pure (Param name callMode, typeExpr)
 
 isTypeName name = Data.Char.isUpper (head $ symStr name)
 
@@ -232,30 +235,27 @@ typeExpression :: TypeExpression -> NameResolver TypeExpression
 typeExpression (TApp name args) = do
     name <- resolveTypeName name
     args <- mapM typeArg args
-    return $ TApp name args
+    pure $ TApp name args
 
     where
     typeArg arg =
         if isTypeName arg
         then resolveName arg
-        else return arg
+        else pure arg
 
 typeExpression (TCons name) =
     if isTypeName name
-    then do
-        name <- resolveTypeName name
-        return $ TCons name
-    else return $ TCons name    -- Type parameters do not need to be resolved.
+    then TCons <$> resolveTypeName name
+    else pure $ TCons name    -- Type parameters do not need to be resolved.
 
-typeExpression t@(TVar v) = return t    -- Type variables are resolved in parser.
+typeExpression t@(TVar v) = pure t    -- Type variables are resolved in parser.
 
 typeExpression (TArrow l r) = do
     l <- typeExpression l
     r <- typeExpression r
-    return $ TArrow l r
-typeExpression (TProd ls) = do
-    ls <- mapM typeExpression (toList ls)
-    return $ TProd (fromList ls)
+    pure $ TArrow l r
+
+typeExpression (TProd ls) = TProd <$> mapM typeExpression ls
 
 next :: NameResolver ProgramElement
 next = P $ \(Program elements, s, t) -> case elements of
@@ -267,20 +267,19 @@ next = P $ \(Program elements, s, t) -> case elements of
 resolveName name = do
     resolvedName <- resolve name False
     case resolvedName of
-        Just (Symb (ResolvedName id n) m) -> return $ Symb (ResolvedName id n) m
+        Just (Symb (ResolvedName id n) m) -> pure $ Symb (ResolvedName id n) m
         Nothing -> error $ "Unresolved symbol: " ++ show name
 
 resolveTypeName name = do
     resolvedName <- resolve name True
     case resolvedName of
-        Just (Symb (ResolvedName id n) m) -> return $ Symb (ResolvedName id n) m
+        Just (Symb (ResolvedName id n) m) -> pure $ Symb (ResolvedName id n) m
         Nothing -> error $ "Unresolved symbol: " ++ show name
 
 resolve :: Symbol -> Bool -> NameResolver (Maybe Symbol)
-resolve (Symb (ResolvedName id absName) m) _ = return $ Just $ Symb (ResolvedName id absName) m
+resolve (Symb (ResolvedName id absName) m) _ = pure $ Just $ Symb (ResolvedName id absName) m
 resolve (Symb (IDENTIFIER name) m) isType = do
-    s <- getState
-    let (_, (_, absName, symbolStack), (_, table)) = s
+    (_, (_, absName, symbolStack), (_, table)) <- getState
     resolve' name absName absName table symbolStack
 
     where
@@ -294,15 +293,15 @@ resolve (Symb (IDENTIFIER name) m) isType = do
             if isDefined (id, entry) scopeTrace symbolStack
             then
                 if isType
-                then return $ Just $ Symb (ResolvedName id (makeAbs name scopeTrace)) m
+                then pure $ Just $ Symb (ResolvedName id (makeAbs name scopeTrace)) m
                 else checkType entry id name scopeTrace
-            else error $ "Use before definition: " ++ name ++ " " ++ show (head symbolStack) ++ "" ++ show (M.lookup id (head symbolStack)) ++ " " ++ show m
+            else error $ "Use before definition: " ++ name ++ " " ++ show (head symbolStack) ++ " " ++ show (M.lookup id (head symbolStack)) ++ " " ++ show m
 
-        findInParentScope = maybe (return Nothing) (\absName -> resolve' name absName originalTrace table symbolStack) (dequalifyName scopeTrace)
+        findInParentScope = maybe (pure Nothing) (\absName -> resolve' name absName originalTrace table symbolStack) (dequalifyName scopeTrace)
 
     -- Are we looking for a data constructor and found a type constructor with the same name?
     checkType (EntryTCons _ _ _ (Just (True, _))) id name absName = resolve (Symb (IDENTIFIER $ name ++ "_C") m) False
-    checkType _                                  id name absName = return $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
+    checkType _                                  id name absName = pure $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
 
     isDefined :: (ID, TableEntry) -> AbsoluteName -> SymbolStack -> Bool
     isDefined _ ("Global" :| []) _ = True   -- The symbol being resolved resides in global scope, hence not local.
@@ -375,15 +374,11 @@ defineRecordTypeEntry (Symb (ResolvedName typeId absName) m) sameNameCons consId
     updateEntry typeId $ EntryTCons (Symb (ResolvedName typeId absName) m) absName scope $ Just (sameNameCons, RecType consId memberIds)
 
 push (Symb (ResolvedName id (name:|_)) _) = do
-    s <- getState
-    let (inp, (scopeId, ns, symbolStack), table) = s
+    (inp, (scopeId, ns, symbolStack), table) <- getState
     let absName = name <| ns
     setState (inp, (Scope id, absName, symbolStack), table)
 
-getScope = do
-    s <- getState
-    let (_, (scope, _, _), _) = s
-    return scope
+getScope = (\(_, (scope, _, _), _) -> scope) <$> getState
 
 defineValCons (Symb (ResolvedName consId absName) m) typeId paramIds = do
     scope <- getScope
@@ -406,9 +401,8 @@ updateVarType name varType = do
     updateEntry (symId name) $ EntryVar name (symTrace name) scope (Just varType)
 
 updateEntry id newEntry = do
-    s <- getState
-    let (inp, scope, (nid, table)) = s
-    table <- maybe (error "Bug") return (updateTableEntry id newEntry table)
+    (inp, scope, (nid, table)) <- getState
+    table <- maybe (error "Bug") pure (updateTableEntry id newEntry table)
     setState (inp, scope, (nid, table))
 
 getParamIds = getSIds $ \(Param s _) -> s

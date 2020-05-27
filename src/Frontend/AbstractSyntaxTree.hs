@@ -55,7 +55,8 @@ data Parameter = Param Symbol CallMode
 data CallMode = ByVal | ByRef
     deriving (Show, Eq)
 
-data TypeSignature = TypeSig Symbol TypeExpression deriving (Show,Eq)
+data TypeSignature = TypeSig Symbol TypeExpression
+    deriving (Show,Eq)
 
 data TypeExpression
     = TArrow TypeExpression TypeExpression
