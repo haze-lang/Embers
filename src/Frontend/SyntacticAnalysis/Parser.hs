@@ -23,14 +23,13 @@ import Frontend.AbstractSyntaxTree
 import CompilerUtilities.ProgramTable
 import CompilerUtilities.AbstractParser
 import Control.Applicative
-import Control.Monad (when)
+import Control.Monad (when, unless)
 import Data.Foldable (foldlM)
 import Data.Char (isUpper, isLower)
 import Data.List.NonEmpty (NonEmpty((:|)), (<|), fromList, toList, reverse)
 import qualified Data.List.NonEmpty as NE
 import Data.Either (Either(Left, Right))
 import qualified Data.Map.Strict as M
-import Frontend.LexicalAnalysis.Token
 import qualified Frontend.LexicalAnalysis.Scanner
 import Frontend.LexicalAnalysis.Token
 
@@ -53,8 +52,7 @@ program = do
 typeDef :: Parser ProgramElement
 typeDef = do
     many wspace
-    t <- _type
-    pure $ Ty t
+    Ty <$> _type
 
 valueDef :: Parser ProgramElement
 valueDef = many wspace >> arrowInstance
@@ -71,7 +69,7 @@ exprDef = do
     validateNames name nameTypeSig
     token EQUALS
     e <- expression
-    when (not (null typeVars)) (error $ "Type variables not supported in non-arrow value definitions: " ++ show typeVars)
+    unless (null typeVars) (error $ "Type variables not supported in non-arrow value definitions: " ++ show typeVars)
     endScope
     pure $ ExpressionVar exprType name e
 
@@ -113,8 +111,7 @@ assignment = do
     x <- ident
     x <- resolveName x <|> defineName x (ExprVal Nothing)     -- First assignment to unbound is definition.
     token EQUALS
-    value <- expression
-    pure $ Assignment x value
+    Assignment x <$> expression
 
 function :: Parser ProgramElement
 function = do
@@ -135,9 +132,7 @@ function = do
 
 formalParam :: Parser (NonEmpty Parameter)
 formalParam = do
-    ps <- some (do
-        p <- ident
-        pure $ Param p ByVal)
+    ps <- some (symToParam <$> ident)
     pure $ fromList ps
 
 typeSig :: Parser (TypeSignature, [Symbol])
@@ -268,15 +263,14 @@ infixApp = do
             operator <- symbIdent
             e2 <- expr
             pure (operator, e2))
-    e <- pure $ lAssociate e r
-    pure e
+    pure $ lAssociate e r
 
     where
     lAssociate e [] = e
     lAssociate first xs = sameName' first $ Prelude.reverse xs
 
         where
-        sameName' last ((op, arg):[]) = App (Ident op) (Tuple (last :| [arg]))
+        sameName' last [(op, arg)] = App (Ident op) (Tuple (last :| [arg]))
         sameName' last ((op, arg):xs) = App (Ident op) (Tuple (sameName' last xs :| [arg]))
 
 expr = switchExpr
@@ -290,8 +284,7 @@ expr = switchExpr
 application :: Parser Expression
 application = do
     func <- expr
-    arg <- expr
-    pure $ App func arg
+    App func <$> expr
 
 groupedExpression :: Parser Expression
 groupedExpression = do
@@ -304,24 +297,19 @@ conditionalExpr :: Parser Expression
 conditionalExpr = do
     token IF
     e1 <- expression
-    many wspace
-    token THEN
+    many wspace >> token THEN
     e2 <- expression
-    many wspace
-    token ELSE
-    e3 <- expression
-    pure $ Conditional e1 e2 e3
+    many wspace >> token ELSE
+    Conditional e1 e2 <$> expression
 
 switchExpr :: Parser Expression
 switchExpr = do
     token SWITCH
     e <- expression
     token $ WHITESPACE Newline
-    cases <- fromList <$> (some _case)
-    token DEFAULT
-    token ARROW
-    def <- expression
-    pure $ Switch e cases def
+    cases <- fromList <$> some _case
+    token DEFAULT >> token ARROW
+    Switch e cases <$> expression
 
     where
     _case :: Parser (Expression, Expression)
@@ -373,22 +361,20 @@ _pattern = literal <|> tuplePattern <|> valConsPattern
     where
     tuplePattern = do
         token LPAREN
-        name <- ident
-        name <- defineName name $ ExprVal Nothing
-        args <- some (token COMMA >> ident)
+        name <- definedIdent
+        args <- some $ token COMMA >> ident
         args <- mapM (\x -> defineName x (ExprVal Nothing) >>= \x -> pure $ Ident x) args
         token RPAREN
-        pure $ Tuple (Ident name :| args)
+        pure $ Tuple $ Ident name:|args
 
     valConsPattern = do
         cons <- identifier
-        args <- (definedIdent <|> tuplePattern)
+        args <- Ident <$> definedIdent <|> tuplePattern
         pure $ App cons args
         <|>
         identifier
 
-        where
-        definedIdent = ident >>= \x -> Ident <$> defineName x (ExprVal Nothing)
+    definedIdent = ident >>= \x -> defineName x (ExprVal Nothing)
 
 -- State
 
@@ -414,7 +400,7 @@ item = P $ \(inp, name, lambdaNo, t, err) -> case inp of
 
 validateNames :: Symbol -> Symbol -> Parser ()
 validateNames name nameTypeSig = when (symStr name /= symStr nameTypeSig) $
-        addError $ "Type Signature and Definition have mismatching names: " ++ (symStr name)
+        addError $ "Type Signature and Definition have mismatching names: " ++ symStr name
 
 -- | If Data Constructor has same name as Type, add _C suffix to constructor.
 handleSameCons (Symb (IDENTIFIER cons) m) typeName =
@@ -500,14 +486,14 @@ bindParams (TArrow (TProd exprList) retType) params = do
     bParams (t:|[]) (p:|[]) = pure [(p, t)]
     bParams (t:|ts) (p:|ps) = case t of
         TArrow _ _ ->
-            if length ts == 0 && length ps == 0
+            if null ts && null ps
             then pure [(p, t)]
             else error ""
         TCons _ -> handleProd (NE.reverse (t:|ts)) (NE.reverse (p:|ps)) []
         TVar _ -> handleProd (NE.reverse (t:|ts)) (NE.reverse (p:|ps)) []
         TApp _ _ -> handleProd (NE.reverse (t:|ts)) (NE.reverse (p:|ps)) []
         TProd prods ->
-            if length ps == 0
+            if null ps
             then handleProd (NE.reverse prods) (NE.reverse (p:|ps)) []
             else error "Arrow Operator is binary and maps exactly one parameter."
 
@@ -528,15 +514,14 @@ defineVirtualParam x = defineConsParam x >>= \(p, t) -> pure (Param p ByVal, TCo
         pure (p, typeName)
 
 -- | Replace type variables in a type expression to resolved type variables.
-replaceTypeVars = foldr (\x xs -> updateTypeVar x xs)
-
+replaceTypeVars = foldr updateTypeVar
     where
     updateTypeVar new tExpr = case tExpr of
         TVar old -> TVar $ sameName new old
-        l `TArrow` r -> (updateTypeVar new l) `TArrow` (updateTypeVar new r)
+        l `TArrow` r -> updateTypeVar new l `TArrow` updateTypeVar new r
         TProd ts -> TProd $ NE.map (updateTypeVar new) ts
         TApp cons args -> TApp (sameName new cons) (map (sameName new) args)
-            
+
         where sameName new old = if symStr new == symStr old then new else old
 
 -- Errors
@@ -562,7 +547,7 @@ resolve (Symb (IDENTIFIER name) m) = do
 
     where
     resolve' :: String -> AbsoluteName -> AbsoluteName -> Table -> Parser (Maybe Symbol)
-    resolve' name absName originalTrace tableState = do
+    resolve' name absName originalTrace tableState =
         case nameLookup (makeAbs name absName) tableState of
             Just (id, _) -> pure $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
             Nothing -> case qualifyName absName of
@@ -575,7 +560,7 @@ resolve s = pure $ Just s
 
 defineParameter (Param name c, t) = do
     p <- defineName name $ ExprVal $ Just t
-    pure ((Param p c), t)
+    pure (Param p c, t)
 
 -- | Defines a name without beginning an attached scope.
 defineName name elem = do
@@ -587,7 +572,7 @@ defineName name elem = do
 beginScope :: Symbol -> CurrentElement -> Parser Symbol
 beginScope (Symb (IDENTIFIER name) m) elem = do
     (inp, (scopeId, ns), lambdaNo, (id, _), err) <- getState
-    absName <- pure $ name <| ns
+    let absName = name <| ns
     id <- insertEntry $ case elem of
         Procedure -> EntryProc (Symb (ResolvedName id absName) m) absName scopeId Nothing
         Function -> EntryFunc (Symb (ResolvedName id absName) m) absName scopeId Nothing
@@ -614,22 +599,15 @@ pushScopeLambda elem = do
 -- | Pops current scope, updating scope state to point to parent scope.
 endScope :: Parser ()
 endScope = do
-    (inp, (scopeId, (n :| ns)), lambdaNo, table, err) <- getState
+    (inp, (scopeId, n:|ns), lambdaNo, table, err) <- getState
     setState (inp, (scopeId, fromList ns), lambdaNo, table, err)
     updateScopeId
 
     where
     updateScopeId = do
         s <- getState
-        let (inp, ((Scope scopeId), ns), lambdaNo, (nextId, table), err) = s
-        parentScope <- pure $ case lookupTableEntry scopeId table of
-            Just (EntryProc _ _ parentScope _) -> parentScope
-            Just (EntryFunc _ _ parentScope _) -> parentScope
-            Just (EntryValCons _ _ parentScope _) -> parentScope
-            Just (EntryTCons _ _ parentScope _) -> parentScope
-            Just (EntryVar _ _ parentScope _) -> parentScope
-            Just (EntryTVar _ _ parentScope) -> parentScope
-            Nothing -> Global
+        let (inp, (Scope scopeId, ns), lambdaNo, (nextId, table), err) = s
+        let parentScope = idToScope scopeId table
         setState (inp, (parentScope, ns), lambdaNo, (nextId, table), err)
 
 freshVirtualParam = do
@@ -640,19 +618,22 @@ freshVirtualParam = do
 
 defineNameInParent (Symb (IDENTIFIER name) m) elem = do
     s <- getState
-    let (inp, (scopeId, (n:|ns)), lambdaNo, _, err) = s
-    absName <- pure $ name :| ns
+    let (inp, (scope, n:|ns), lambdaNo, (_, table), err) = s
+    let absName = name:|ns
+    let parentScope = case scope of
+            Scope scopeId -> idToScope scopeId table
+            Global -> error "[Char]"
     id <- insertEntry $ case elem of
-        Procedure -> EntryProc (Symb (IDENTIFIER name) m) absName scopeId Nothing
-        Function -> EntryFunc (Symb (IDENTIFIER name) m) absName scopeId Nothing
-        Constructor -> EntryValCons (Symb (IDENTIFIER name) m) absName scopeId Nothing
-        NullConstructor typeId -> EntryValCons (Symb (IDENTIFIER name) m) absName scopeId (Just (typeId, []))
-        Type -> EntryTCons (Symb (IDENTIFIER name) m) absName scopeId Nothing
-        ExprVal varType -> EntryVar (Symb (IDENTIFIER name) m) absName scopeId varType
+        Procedure -> EntryProc (Symb (IDENTIFIER name) m) absName parentScope Nothing
+        Function -> EntryFunc (Symb (IDENTIFIER name) m) absName parentScope Nothing
+        Constructor -> EntryValCons (Symb (IDENTIFIER name) m) absName parentScope Nothing
+        NullConstructor typeId -> EntryValCons (Symb (IDENTIFIER name) m) absName parentScope (Just (typeId, []))
+        Type -> EntryTCons (Symb (IDENTIFIER name) m) absName parentScope Nothing
+        ExprVal varType -> EntryVar (Symb (IDENTIFIER name) m) absName parentScope varType
 
     -- TableState is changed after insertion, so we extract the updated table.
     (_, _, _, table, _) <- getState
-    setState (inp, (Scope id, (n:|ns)), lambdaNo, table, err)
+    setState (inp, (Scope id, n:|ns), lambdaNo, table, err)
     pure $ Symb (ResolvedName id absName) m
 
 insertEntry :: TableEntry -> Parser ID

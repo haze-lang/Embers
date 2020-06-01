@@ -405,7 +405,7 @@ updateEntry id newEntry = do
     table <- maybe (error "Bug") pure (updateTableEntry id newEntry table)
     setState (inp, scope, (nid, table))
 
-getParamIds = getSIds $ \(Param s _) -> s
+getParamIds = fmap paramId
 
 getBoundParamIds = getSIds $ \(Param s _, _) -> s
 

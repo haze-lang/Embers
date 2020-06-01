@@ -67,7 +67,8 @@ data TypeExpression
     deriving Eq
 
 data Expression
-    = App Expression Expression
+    = Access Expression Int         -- Acess elements of a tuple.
+    | App Expression Expression
     | Switch Expression (NonEmpty (Expression, Expression)) Expression
     | Conditional Expression Expression Expression
     | Lambda LambdaExpression
@@ -95,6 +96,10 @@ symStr (Symb (ResolvedName _ (x:|_)) _) = x
 
 symId (Symb (ResolvedName id _) _) = id
 symId (Symb (IDENTIFIER x) _) = error x
+
+paramId (Param s _) = symId s
+
+symToParam s = Param s ByVal
 
 getSym name = Symb (IDENTIFIER name) (Meta 0 0 "")
 

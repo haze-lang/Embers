@@ -24,14 +24,13 @@ module Frontend.TypeSystem.TypeChecker
 -- )
 where
 
-import Data.List.NonEmpty(NonEmpty((:|)), fromList, toList)
+import Data.List.NonEmpty (NonEmpty((:|)), fromList, toList)
 import qualified Data.List.NonEmpty as NE
 import Control.Applicative (many, empty)
 import Control.Monad (unless)
 import Data.Maybe (fromJust)
 import Frontend.AbstractSyntaxTree
 import qualified Data.Map.Strict as M
-import Data.Foldable (foldlM)
 import Frontend.LexicalAnalysis.Token (Literal(..), Identifier(ResolvedName))
 import CompilerUtilities.ProgramTable
 import CompilerUtilities.AbstractParser (AbsParser(P), getState, setState, parse)
@@ -82,7 +81,7 @@ function (Func ps retType name e) = do
     pure $ Func ps retType name e
 
 statementType (Assignment var r) = do
-    varType <- lookupType (symId var)
+    varType <- lookupType' (symId var)
     t <- expressionType r
     case varType of
         Nothing -> defineVarType var t
@@ -102,11 +101,11 @@ expressionType (Lit l) = case l of
 
     where f x = TCons . x <$> getTable
 
-expressionType (Ident (Symb (ResolvedName id _) _)) = fromJust <$> lookupType id
+expressionType (Ident (Symb (ResolvedName id _) _)) = fromJust <$> lookupType' id
 
 expressionType (Tuple es) = TProd <$> mapM expressionType es
 
-expressionType e@(Lambda _) = inferType e >> fromJust <$> lookupType (symId $ name e)
+expressionType e@(Lambda _) = inferType e >> fromJust <$> lookupType' (symId $ name e)
     where
     name (Lambda (FuncLambda n _ _)) = n
     name (Lambda (ProcLambda n _ _)) = n
@@ -168,8 +167,7 @@ expressionType (App l r) = do
     if isPolymorphic tl
     then polymorphicApp l r tl tr
     else do
-        a <- assertStructural tr paramType
-        unless a $ error $ "Expected type " ++ show paramType ++ " but argument supplied has type " ++ show tr
+        assertWithError ("Expected type " ++ show paramType ++ " but argument supplied has type " ++ show tr) tr paramType
         pure retType
 
     where
@@ -225,7 +223,7 @@ defineVarType (Symb (ResolvedName id absName) m) varType = do
     case lookupTableEntry id t of
         Just (EntryVar name absName scope Nothing) -> updateEntry id $ EntryVar name absName scope (Just varType)
         Just (EntryVar name absName scope (Just t)) -> if varType == t then pure () else error "Type conflict found."
---      Nested switch expressions call this on variables with defined types. TODO: Investigate.
+--      Nested switch expressions call this ^ on variables with defined types. TODO: Investigate.
 
 updateEntry :: ID -> TableEntry -> TypeChecker ()
 updateEntry id newEntry = do
@@ -233,8 +231,8 @@ updateEntry id newEntry = do
     table <- maybe empty pure (updateTableEntry id newEntry table)
     setState (inp, (nextId, table), err)
 
-lookupType :: ID -> TypeChecker (Maybe TypeExpression)
-lookupType id = do
+lookupType' :: ID -> TypeChecker (Maybe TypeExpression)
+lookupType' id = do
     t <- getTable
     case lookupTableEntry id t of
         Just entry -> case entry of
@@ -268,7 +266,7 @@ lookupType id = do
         [x] -> consProdType x
         _:_ -> TProd . fromList <$> mapM consProdType pIds
 
-        where consProdType x = fromJust <$> lookupType x
+        where consProdType x = fromJust <$> lookupType' x
 
 getTable :: TypeChecker Table
 getTable = getState >>= \(_, (_, table), _) -> pure table
@@ -307,7 +305,7 @@ inferType e = do
             table <- getTable
             case fromJust $ M.lookup (symId symbol) table of
                 EntryTCons {} -> pure $ TCons symbol       -- Add primitive types so the inferrer can refer to them since they do not have value constructors.
-                _ -> fromJust <$> lookupType (symId symbol)
+                _ -> fromJust <$> lookupType' (symId symbol)
 
         pred entry = case entry of
             EntryTCons {} -> True

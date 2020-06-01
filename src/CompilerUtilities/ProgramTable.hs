@@ -21,8 +21,9 @@ module CompilerUtilities.ProgramTable
 (
     TableEntry (..),
     Scope (..),
-    TableState, ID, NextID, AbsoluteName, Table, TypeDef(..),
-    initializeTable, insertTableEntry, updateTableEntry, lookupTableEntry, idToName, nameLookup,
+    ProgramState, TableState, ID, NextID, AbsoluteName, Table, TypeDef(..),
+    initializeTable, insertTableEntry, updateTableEntry, lookupTableEntry,
+    idToName, nameLookup, idToScope, lookupType,
     boolId, unitId, stringId, intId, charId,
     getRelative
 )
@@ -30,6 +31,7 @@ where
 
 import Data.Map.Strict (Map)
 import Data.Maybe (fromJust)
+import qualified Data.List.NonEmpty as NE
 import Frontend.AbstractSyntaxTree
 import qualified Data.Map.Strict as M
 import Frontend.LexicalAnalysis.Token
@@ -50,6 +52,7 @@ data TableEntry
     | EntryTCons Name AbsoluteName Scope (Definition (SameNameCons, TypeDef))
     deriving (Eq)
 
+type ProgramState = (Program, TableState)
 type TableState = (NextID, Table)
 type Table = Map ID TableEntry
 
@@ -112,6 +115,10 @@ updateTableEntry' id newEntry = P (\(id', table) ->
         Just t -> Left ((), (id', t))
         Nothing -> Right (id', table))
 
+nextId = do
+    (nId, _) <- getState
+    return nId
+
 -- Table Utilities
 
 -- | Only inserts a value if key does not already exist.
@@ -140,6 +147,15 @@ idToName table id = case fromJust $ M.lookup id table of
     EntryVar n _ _ _ -> n
     EntryTVar n _ _ -> n
 
+idToScope id table = case fromJust $ M.lookup id table of
+    EntryProc _ _ scope _ -> scope
+    EntryFunc _ _ scope _ -> scope
+    EntryLambda _ _ scope _ _ -> scope
+    EntryValCons _ _ scope _ -> scope
+    EntryTCons _ _ scope _ -> scope
+    EntryVar _ _ scope _ -> scope
+    EntryTVar _ _ scope -> scope
+
 nameLookup :: AbsoluteName -> Table -> Maybe (ID, TableEntry)
 nameLookup name table = case M.toList $ M.filter (search name) table of
     [x] -> Just x
@@ -157,9 +173,40 @@ nameLookup name table = case M.toList $ M.filter (search name) table of
         EntryVar _ entryName _ _ -> entryName == absName
         EntryTVar _ entryName _ -> entryName == absName
 
-nextId = do
-    (nId, _) <- getState
-    return nId
+lookupType :: ID -> Table -> Maybe TypeExpression
+lookupType id t =
+    case lookupTableEntry id t of
+        Just entry -> case entry of
+            EntryProc _ _ _ (Just (pIds, ret)) -> arrowType pIds ret
+            EntryFunc _ _ _ (Just (pIds, ret)) -> arrowType pIds ret
+            EntryLambda _ _ _ pIds (Just ret) -> arrowType pIds ret
+            EntryVar _ _ _ (Just t) -> Just t
+            -- EntryTVar t _ _ -> pure $ Just $ TVar t
+            EntryValCons _ _ _ (Just (retId, pIds)) -> do
+                let (Just retName) = getName retId t
+                let retType = TCons retName
+                case pIds of
+                    [] -> Just retType                 -- Nullary value constructor
+                    _ -> arrowType pIds retType
+            EntryTCons {} -> error $ "Expected value, but " ++ show id ++ " is a type."
+            _ -> Nothing
+        -- Nothing -> error $ "Bug: Unresolved symbol found: " ++ show id
+
+    where
+    getName id table = do
+        e <- lookupTableEntry id table
+        case e of
+            EntryTCons name _ _ _ -> pure name
+            -- _ -> error $ "Bug: getName called on entry of a non-type element. " ++ show id
+
+    arrowType pIds retType = let paramType = constructProductType pIds
+        in Just $ TArrow paramType retType
+
+    constructProductType pIds = case pIds of
+        [x] -> consProdType x
+        _:_ -> TProd . NE.fromList $ map consProdType pIds
+
+        where consProdType x = fromJust $ lookupType x t
 
 -- Standard Library Utilities
 
@@ -208,7 +255,7 @@ instance Show TableEntry where
     show (EntryProc name absName parentScope def) = "Procedure: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showArrDef def
     show (EntryLambda name absName parentScope params def) = "Lambda: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showLambda params def
     show (EntryTCons name absName parentScope def) = "Type: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showTypeDef def
-    show (EntryValCons name absName parentScope def) = "Value Constructor: " ++ show absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ show def
+    show (EntryValCons name absName parentScope def) = "Value Constructor: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ show def
     show (EntryVar name absName parentScope def) = "Variable: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showRetType def
     show (EntryTVar name absName parentScope) = "Type Variable: " ++ showScope absName ++ "\tScope: " ++ show parentScope
 
