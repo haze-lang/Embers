@@ -110,6 +110,9 @@ symTrace (Symb (ResolvedName _ scopeTrace) _) = scopeTrace
 instance Ord Symbol where
     s1 `compare` s2 = symId s1 `compare` symId s2
 
+instance Ord Parameter where
+    s1 `compare` s2 = paramId s1 `compare` paramId s2
+
 instance Show Symbol where
     show (Symb id m) = show id ++ " at " ++ show m
 

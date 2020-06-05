@@ -45,9 +45,8 @@ prodType ps = TProd ps
 
 expression :: Expression -> Infer TypeExpression
 expression (Lit (NUMBER _)) = intType
-expression (Lit UNIT) = unitType
-expression (Lit (STRING _)) = stringType
 expression (Lit (CHAR _)) = charType
+expression (Lit (STRING _)) = error "String literal found."
 
 expression (Ident v) = do
     c <- getContext

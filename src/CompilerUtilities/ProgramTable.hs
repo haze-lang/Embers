@@ -21,10 +21,11 @@ module CompilerUtilities.ProgramTable
 (
     TableEntry (..),
     Scope (..),
-    ProgramState, TableState, ID, NextID, AbsoluteName, Table, TypeDef(..),
-    initializeTable, insertTableEntry, updateTableEntry, lookupTableEntry,
+    ProgramState, TableState, ID, NextID, AbsoluteName, Table, TypeDetails, TypeDef(..),
+    initializeTable, initializeTableWith, insertTableEntry, updateTableEntry, lookupTableEntry,
     idToName, nameLookup, idToScope, lookupType,
     boolId, unitId, stringId, intId, charId,
+    primitiveType,
     getRelative
 )
 where
@@ -36,59 +37,78 @@ import Frontend.AbstractSyntaxTree
 import qualified Data.Map.Strict as M
 import Frontend.LexicalAnalysis.Token
 import CompilerUtilities.AbstractParser
-import Data.List.NonEmpty (NonEmpty((:|)), (<|), head)
+import Data.List.NonEmpty (NonEmpty((:|)), (<|))
 
 initializeTable :: TableState
-initializeTable = case parse stdLib (0, M.fromList []) of
-    Left (_, state) -> state
+initializeTable = case parse stdLib (0, (0, M.fromList [])) of
+    Left (_, (_, state)) -> state
+
+initializeTableWith :: TableState -> TableState
+initializeTableWith tableState = case parse stdLib (0, tableState) of
+    Left (_, (_, state)) -> state
 
 data TableEntry
-    = EntryProc Name AbsoluteName Scope (Definition ([ParamId], ReturnType))
-    | EntryFunc Name AbsoluteName Scope (Definition ([ParamId], ReturnType))
-    | EntryLambda Name AbsoluteName Scope [ParamId] (Definition ReturnType)
-    | EntryValCons Name AbsoluteName Scope (Definition (TypeId, [ParamId]))
-    | EntryVar Name AbsoluteName Scope (Definition VarType)
-    | EntryTVar Name AbsoluteName Scope
-    | EntryTCons Name AbsoluteName Scope (Definition (SameNameCons, TypeDef))
-    deriving (Eq)
+    = EntryProc Symbol AbsoluteName Scope (Definition ([ParamId], ReturnType))
+    | EntryFunc Symbol AbsoluteName Scope (Definition ([ParamId], ReturnType))
+    | EntryLambda Symbol AbsoluteName Scope [ParamId] (Definition ReturnType)
+    | EntryValCons Symbol AbsoluteName Scope (Definition (TypeID, [ParamId]))
+    | EntryVar Symbol AbsoluteName Scope (Definition VarType)
+    | EntryTVar Symbol AbsoluteName Scope
+    | EntryTCons Symbol AbsoluteName Scope (Definition (SameNameCons, TypeDef, Maybe TypeDetails))
+    deriving Eq
 
 type ProgramState = (Program, TableState)
 type TableState = (NextID, Table)
 type Table = Map ID TableEntry
 
 stdLib = do
-    insertUnit
-    insertBool
     insertChar
-    insertString
     insertInt
-    -- insertPrint
+    insertPrint
+    insertPlus
+    insertMinus
 
 -- Standard Library Initialization
 
-insertUnit = do
-    typeId <- insertTypeEntry (getSymbIdent "Unit") [] True
-    id <- nextId
-    consId <- insertValConsEntry (getSymb "Unit_C" id) (typeId, [])
-    updateTableEntry' typeId (EntryTCons (getSymb "Unit" typeId) (getAbs $ getSymbIdent "Unit") Global (Just (True, SType [consId])))
-
-insertBool = do
-    typeId <- insertTypeEntry (getSymbIdent "Bool") [] False
-    id <- nextId
-    consId1 <- insertValConsEntry (getSymb "True" id) (typeId, [])
-    id <- nextId
-    consId2 <- insertValConsEntry (getSymb "False" id) (typeId, [])
-    updateTableEntry' typeId (EntryTCons (getSymb "Bool" typeId) (getAbs $ getSymbIdent "Bool") Global (Just (False, SType [consId1, consId2])))
-
 insertChar = nextId >>= \id -> insertTypeEntry (getSymb "Char" id) [] False
-insertString = nextId >>= \id -> insertTypeEntry (getSymb "String" id) [] False
 insertInt = nextId >>= \id -> insertTypeEntry (getSymb "Int" id) [] False
 
-insertPrint = nextId >>= \id -> insertProcEntry (getSymb "Print" id)
+insertPrint = insertProc "Print" param unitType
+    where param = do
+            s <- charType
+            pure [s]
 
-insertTypeEntry name constructors sameNameCons = insertTableEntry' $ EntryTCons name (getAbs name) Global (Just (sameNameCons, SType []))
+insertPlus = insertProc "+" param intType
+    where param = do
+            s <- intType
+            pure [s, s]
+
+insertMinus = insertProc "-" param intType
+    where param = do
+            s <- intType
+            pure [s, s]
+
+insertProc nameStr paramTypes retType = do
+    id <- nextId
+    let name = getSymb nameStr id
+    insertProcEntry name
+    pTypes <- paramTypes
+    pIds <- getParamIds name pTypes
+    ret <- retType
+    updateProcEntry name (pIds, ret)
+
+    where
+    getParamIds func = mapM getParam
+        where
+        getParam parmType = do
+            p <- freshParam
+            insertTableEntry' $ EntryVar p (symStr p:|[symStr func, "Global"]) (Scope $ symId func) (Just parmType)
+            pure $ symId p
+
+insertTypeEntry name constructors sameNameCons = insertTableEntry' $ EntryTCons name (getAbs name) Global (Just (sameNameCons, SType [], Nothing))
 
 insertProcEntry name = insertTableEntry' $ EntryProc name (getAbs name) Global Nothing
+updateProcEntry name retType = updateTableEntry' (symId name) $ EntryProc name (getAbs name) Global (Just retType)
 
 insertValConsEntry name varType = insertTableEntry' $ EntryValCons name (getAbs name) Global (Just varType)
 
@@ -99,25 +119,45 @@ getSymb name id = Symb (ResolvedName id (name:|["Global"])) (Meta 0 0 "StandardL
 
 getSymbIdent name = Symb (IDENTIFIER name) (Meta 0 0 "StandardLibrary.hz")
 
--- Table Manipulation
+-- Table Manipulation Utilities
 
-type TableManipulator a = AbsParser TableState a
+type ManipulatorState = (Int, TableState)
+
+type TableManipulator a = AbsParser ManipulatorState a
 
 insertTableEntry' :: TableEntry -> TableManipulator ID
-insertTableEntry' entry = P (\(id, table) ->
+insertTableEntry' entry = P $ \(p, (id, table)) ->
     case insertTableEntry id entry table of
-        Just t -> Left (id, (id + 1, t))
-        Nothing -> Right (id, table))
+        Just t -> Left (id, (p, (id + 1, t)))
+        Nothing -> Right (p, (id, table))
 
 updateTableEntry' :: ID -> TableEntry -> TableManipulator ()
-updateTableEntry' id newEntry = P (\(id', table) ->
+updateTableEntry' id newEntry = P $ \(p, (id', table)) ->
     case updateTableEntry id newEntry table of
-        Just t -> Left ((), (id', t))
-        Nothing -> Right (id', table))
+        Just t -> Left ((), (p, (id', t)))
+        Nothing -> Right (p, (id', table))
+
+boolType = _type boolId
+unitType = _type unitId
+stringType = _type stringId
+charType = _type charId
+intType = _type intId
+
+_type x = do
+    (_, table) <- snd <$> getState
+    pure $ TCons $ x table
 
 nextId = do
-    (nId, _) <- getState
+    (nId, _) <- snd <$> getState
     return nId
+
+freshParam = do
+    (p, t) <- getState
+    setState (p + 1, t)
+    id <- nextId
+    let name = "_p" ++ show p
+    let param = getSymWithId id name
+    pure param
 
 -- Table Utilities
 
@@ -137,7 +177,7 @@ updateTableEntry id newEntry table = case M.lookup id table of
 lookupTableEntry :: ID -> Table -> Maybe TableEntry
 lookupTableEntry = M.lookup
 
-idToName :: Table -> ID -> Name
+idToName :: Table -> ID -> Symbol
 idToName table id = case fromJust $ M.lookup id table of
     EntryProc n _ _ _ -> n
     EntryFunc n _ _ _ -> n
@@ -210,21 +250,29 @@ lookupType id t =
 
 -- Standard Library Utilities
 
-boolId = f "Bool"
-unitId = f "Unit"
-stringId = f "String"
-intId = f "Int"
-charId = f "Char"
+boolId = globalLookup "Bool"
+unitId = globalLookup "Unit"
+stringId = globalLookup "String"
+intId = globalLookup "Int"
+charId = globalLookup "Char"
 
-f name table = case nameLookup (name:|["Global"]) table of
+primitiveType table s
+    | symId s == symId (boolId table) = Just 1
+    | symId s == symId (unitId table) = Just 1
+    | symId s == symId (intId table) = Just 8
+    | symId s == symId (charId table) = Just 1
+    | otherwise = Nothing
+
+globalLookup name table = case nameLookup (name:|["Global"]) table of
     Just (id, EntryTCons symb _ _ _) -> symb
     Nothing -> error $ "Standard Library Initialization Error:" ++ name ++ " not found."
 
--- Helper Types & Aliases
+-- Helper Types, Aliases & Utilities
 
 data Scope
     = Scope ID
-    | Global deriving (Eq,Show)
+    | Global
+    deriving (Eq,Show)
 
 type Definition = Maybe
 
@@ -236,19 +284,19 @@ data TypeDef
 type ID = Int
 type NextID = ID
 type AbsoluteName = NonEmpty String -- Alternate unique identifier.
-type Name = Symbol
 type ReturnType = TypeExpression
 type Param = Identifier
 type VarType = TypeExpression
 type ValConsID = ID
 type FieldID = ID
 type SameNameCons = Bool
-type TypeId = ID
 type ParamId = ID
+type TypeID = ID
+type MaxSize = Int
+type Ctor = Map Int Int     -- Array of offsets of constructor's fields; (0, x) = x is offset of first field, (1, y) = y is offset of second field
+type TypeDetails = (MaxSize, [Ctor])
 
--- Type Aliases Utilities
-
-getRelative = Data.List.NonEmpty.head
+getRelative = NE.head
 
 instance Show TableEntry where
     show (EntryFunc name absName parentScope def) = "Function: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showArrDef def
@@ -266,7 +314,10 @@ showArrDef Nothing = "Parameters & Return Type: Undefined"
 showArrDef (Just (params, retId)) = "Parameters: " ++ show params ++ "\tReturn Type: " ++ show retId
 
 showTypeDef Nothing = "Aliasing Constructor & Type: Undefined"
-showTypeDef (Just (sameName, tDef)) = "Aliasing Constructor: " ++ show sameName ++ "\tType: " ++ show tDef
+showTypeDef (Just (sameName, tDef, details)) = "Aliasing Constructor: " ++ show sameName ++ "\tType: " ++ show tDef ++ showStruct details
+
+showStruct (Just (maxSize, ctors)) = "\tSize: " ++ show maxSize ++ "\tCtors: " ++ show ctors
+showStruct Nothing = "Structure N/A"
 
 showRetType Nothing = "Type: Undefined"
 showRetType (Just typeExpr) = "Type: " ++ show typeExpr

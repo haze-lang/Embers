@@ -34,7 +34,7 @@ import qualified Data.List.NonEmpty as NE
 import Frontend.AbstractSyntaxTree
 import CompilerUtilities.ProgramTable
 
--- TODO: Nested λs, unassigned λs, λs appearing in tuples e.g. x = (1, a => a + 1, 2)
+-- TODO: Nested λs, unassigned λs, λs appearing in tuples e.g. x = (1, a => a + 1, 2), λs as last statement
 
 -- | Resolve λs by promoting state variables to parameters and updating the call references.
 resolveLambdas :: ProgramState -> ProgramState
@@ -43,7 +43,7 @@ resolveLambdas s = case runState program (initState s) of
 
 program :: Simplifier Program
 program = do
-    (Program p, _) <- progState
+    (Program p, _) <- getProg
     Program <$> mapM pe p
 
     where
@@ -55,20 +55,6 @@ program = do
 procedure (Proc ps retType name stmts) = Proc ps retType name <$> mapM statement stmts
 
 function (Func ps retType name body) = Func ps retType name <$> expression body
-
-updateVarType :: Symbol -> Symbol -> [Symbol] -> Simplifier ()
-updateVarType s lambdaName stateVars = do
-    (p, (nextId, table)) <- progState
-    case fromJust $ M.lookup (symId s) table of
-        EntryVar s absName scope (Just oldType) -> do
-            let newType = case oldType of
-                    _ `TArrow` _ -> let newLambdaType = fromJust $ lookupType (symId lambdaName) table
-                        in TProd (newLambdaType:|consProdType table stateVars)
-
-            let newTable = fromJust $ updateTableEntry (symId s) (EntryVar s absName scope (Just newType)) table
-            putProg (p, (nextId, newTable))
-
-    where consProdType table = fmap (\s -> fromJust $ lookupType (symId s) table)
 
 statement :: Statement -> Simplifier Statement
 statement s = case s of
@@ -119,6 +105,8 @@ lambda (ProcLambda name params@(p:|ps) stmts) = do
     updateLambdaEntry name newParams
     pure (ProcLambda name newParams stmts, paramTable)
 
+lambda f@FuncLambda {} = pure (f, M.empty)
+
 _statement s = case s of
     Assignment left e -> Assignment left <$> _expression e
     StmtExpr e -> StmtExpr <$> _expression e
@@ -155,15 +143,15 @@ _expression (App func args) = do
 
 paramLookup :: Symbol -> Simplifier (Maybe Symbol)
 paramLookup s = do
-    (pStack, _, _) <- localState
+    (pStack, _, _) <- getLocal
     let ((_, top):_) = pStack
     pure $ M.lookup s top
 
 -- | New parameter as a substitute for supplied state variable.
 promoteToParam :: Symbol -> Simplifier Symbol
 promoteToParam s = do
-    (prog, (nextId, table)) <- progState
-    (pStack, cTable, pSet) <- localState
+    (prog, (nextId, table)) <- getProg
+    (pStack, cTable, pSet) <- getLocal
     let (parent, paramTable):rest = pStack
     let newParam = getSymWithId nextId ("_" ++ symStr s)
     let newEntry = case fromJust $ M.lookup (symId s) table of
@@ -176,7 +164,7 @@ promoteToParam s = do
 
 isGlobal :: Symbol -> Simplifier Bool
 isGlobal s = do
-    (_, (_, table)) <- progState
+    (_, (_, table)) <- getProg
     case idToScope (symId s) table of
         Global -> pure True
         _ -> pure False
@@ -184,24 +172,24 @@ isGlobal s = do
 -- | Is original parameter.
 isParam :: Symbol -> Simplifier Bool
 isParam s = do
-    (_, _, pSet) <- localState
+    (_, _, pSet) <- getLocal
     pure $ S.member s pSet
 
 -- | Mark original parameters to be left unchanged.
 markParam :: Parameter -> Simplifier ()
 markParam (Param s _) = do
-    (stack, cTable, pSet) <- localState
+    (stack, cTable, pSet) <- getLocal
     putLocal (stack, cTable, S.insert s pSet)
 
 pushParamTable :: Symbol -> Simplifier ()
 pushParamTable symb = do
-    (stack, cTable, pSet) <- localState
+    (stack, cTable, pSet) <- getLocal
     let newStack = (symb, M.empty):stack
     putLocal (newStack, cTable, pSet)
 
 popParamTable :: Simplifier ParamTable
 popParamTable = do
-    (stack, cTable, pSet) <- localState
+    (stack, cTable, pSet) <- getLocal
     case stack of
         (_, paramTable):xs -> do
             putLocal (xs, cTable, pSet)
@@ -211,21 +199,21 @@ popParamTable = do
 
 updateLambdaEntry :: Symbol -> NonEmpty Parameter -> Simplifier ()
 updateLambdaEntry name params = do
-    (p, (nextId, table)) <- progState
+    (p, (nextId, table)) <- getProg
     let paramIDs = map paramId (NE.toList params)
     let newEntry = case fromJust $ M.lookup (symId name) table of
             EntryLambda _ absName scope _ retType -> EntryLambda name absName scope paramIDs retType
     let newTable = M.insert (symId name) newEntry table
-    l <- localState
+    l <- getLocal
     put ((p, (nextId, newTable)), l)
 
 _lookupCall s = do
-    (pStack, cTable, set) <- localState
+    (pStack, cTable, set) <- getLocal
     pure $ M.lookup s cTable
 
 -- | Mark a call site to include state variables as arguments. 
 markCall var stateVars = do
-    (pStack, cTable, set) <- localState
+    (pStack, cTable, set) <- getLocal
     putLocal (pStack, M.insert var stateVars cTable, set)
 
 putProg :: ProgramState -> Simplifier ()
@@ -234,8 +222,22 @@ putProg p = get >>= \(_, l) -> put (p, l)
 putLocal :: LocalState -> Simplifier ()
 putLocal l = get >>= \(p, _) -> put (p, l)
 
-progState = gets fst
-localState = gets snd
+getProg = gets fst
+getLocal = gets snd
+
+updateVarType :: Symbol -> Symbol -> [Symbol] -> Simplifier ()
+updateVarType s lambdaName stateVars = do
+    (p, (nextId, table)) <- getProg
+    case fromJust $ M.lookup (symId s) table of
+        EntryVar s absName scope (Just oldType) -> do
+            let newType = case oldType of
+                    _ `TArrow` _ -> let newLambdaType = fromJust $ lookupType (symId lambdaName) table
+                        in TProd (newLambdaType:|consProdType table stateVars)
+
+            let newTable = fromJust $ updateTableEntry (symId s) (EntryVar s absName scope (Just newType)) table
+            putProg (p, (nextId, newTable))
+
+    where consProdType table = fmap (\s -> fromJust $ lookupType (symId s) table)
 
 -- | Mapping from state variables to promoted parameters
 type ParamTable = Map Symbol Symbol     
@@ -243,6 +245,7 @@ type ParamTable = Map Symbol Symbol
 -- | Set of original parameters (to be left unchanged).
 type ParamSet = Set Symbol
 
+-- | Mapping from variables to be updated when being called.
 type CallSitesTable = Map Symbol [Expression]
 
 type LocalState = ([(Symbol, ParamTable)], CallSitesTable, ParamSet)

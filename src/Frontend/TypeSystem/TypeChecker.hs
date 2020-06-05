@@ -60,7 +60,9 @@ procedure (Proc ps retType name stmts) = do
         Nothing -> do   -- Last statement is an assignment
             isUnitRetType <- isUnit retType
             if isUnitRetType
-            then pure $ fromList $ toList stmts ++ [unitStmt]
+            then do
+                u <- unitStmt
+                pure $ fromList $ toList stmts ++ [u]
             else do
                 addError $ "Expected return type is Unit, but signature has type " ++ show retType
                 pure stmts
@@ -71,7 +73,11 @@ procedure (Proc ps retType name stmts) = do
     pure $ Proc ps retType name stmts
 
     where
-    unitStmt = StmtExpr $ Lit UNIT
+    unitStmt = do
+        t <- getTable
+        let unit = unitId t
+        pure $ StmtExpr $ Ident unit
+
     isUnit te = assertNominal te . unitId <$> getTable
 
 function (Func ps retType name e) = do
@@ -96,8 +102,7 @@ expressionType :: Expression -> TypeChecker TypeExpression
 expressionType (Lit l) = case l of
     NUMBER _ -> f intId
     CHAR _ -> f charId
-    STRING _ -> f stringId
-    UNIT -> f unitId
+    STRING _ -> error "String literal found."
 
     where f x = TCons . x <$> getTable
 
@@ -180,8 +185,7 @@ expressionType (App l r) = do
         TArrow l r -> isPolymorphic l || isPolymorphic r
         TProd ts -> foldr (\a b -> isPolymorphic a || b) False ts
 
-polymorphicApp l r tl tr = do
-    error $ show tl
+polymorphicApp l r tl tr = error "Polymorphic application not supported."
 
 assertWithError err t1 t2 = do
     a <- assertStructural t1 t2

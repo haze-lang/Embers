@@ -25,7 +25,7 @@ where
 
 import Control.Monad (when)
 import Control.Applicative (many)
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, fromMaybe)
 import CompilerUtilities.AbstractParser
 import Frontend.LexicalAnalysis.Token
 import qualified Data.Char (isUpper)
@@ -34,6 +34,7 @@ import CompilerUtilities.ProgramTable
 import qualified Frontend.SyntacticAnalysis.Parser as P
 import Frontend.AbstractSyntaxTree
 import Data.List.NonEmpty as NE (NonEmpty((:|)), (<|), fromList, toList, map)
+import qualified Data.List.NonEmpty as NE
 import Data.Foldable (foldlM)
 
 resolveNames :: (Program, TableState) -> (Program, TableState)
@@ -77,13 +78,19 @@ function (Func paramType retType name body) = do
 
 _type :: Type -> NameResolver ProgramElement
 _type (SumType (Symb (ResolvedName typeId absName) m) cons) = do
-    cons <- mapM valCons (toList cons)
+    cons <- mapM valCons cons
     let sameCons = isSameConsName (getRelative absName) cons
-    let consIds = getIds cons
-    defineTypeEntry (Symb (ResolvedName typeId absName) m) sameCons consIds
-    pure $ Ty $ SumType (Symb (ResolvedName typeId absName) m) (fromList cons)
+    let consIds = getIds (toList cons)
+    let tagSize = getTagSize (length consIds)
+    t <- getTable
+    let maxSize = tagSize + maximum (fmap (consSize t) cons)
+    let consMaps = getConsMaps t tagSize (toList cons)
+    let details = (maxSize, consMaps)
+    defineTypeEntry (Symb (ResolvedName typeId absName) m) sameCons consIds details
+    pure $ Ty $ SumType (Symb (ResolvedName typeId absName) m) cons
 
     where
+    getTagSize consCount = consCount `div` 256 + 1
     getIds = getSIds $ \(ValCons cons _) -> cons
     isSameConsName typeName = foldr (\(ValCons name _) b -> (typeName ++ "_C") == symStr name || b) False
 
@@ -99,12 +106,16 @@ _type (Record typeName cons members) = do
     let sameCons = (symStr typeName ++ "_C") == symStr consName
     members <- mapM member (toList members)
     let memberIds = getMemberIds members
-    defineRecordTypeEntry typeName sameCons consId memberIds
     let (Symb (ResolvedName typeId _) _) = typeName
     params <- boundParams params
     let paramIds = getBoundParamIds params
     defineValCons consName typeId paramIds
     let cons = ValCons consName params
+    t <- getTable
+    let size = consSize t cons
+    let consMaps = getConsMaps t 0 [cons]
+    let details = (size, consMaps)
+    defineRecordTypeEntry typeName sameCons consId memberIds details
     pure $ Ty $ Record typeName cons (fromList members)
 
     where
@@ -222,7 +233,6 @@ mappingType (ps, retType) = do
 
 boundParams :: [(Parameter, TypeExpression)] -> NameResolver [(Parameter, TypeExpression)]
 boundParams = mapM boundParam
-
     where
     boundParam (Param name callMode, typeExpr) = do
         typeExpr <- typeExpression typeExpr
@@ -300,7 +310,7 @@ resolve (Symb (IDENTIFIER name) m) isType = do
         findInParentScope = maybe (pure Nothing) (\absName -> resolve' name absName originalTrace table symbolStack) (dequalifyName scopeTrace)
 
     -- Are we looking for a data constructor and found a type constructor with the same name?
-    checkType (EntryTCons _ _ _ (Just (True, _))) id name absName = resolve (Symb (IDENTIFIER $ name ++ "_C") m) False
+    checkType (EntryTCons _ _ _ (Just (True, _, _))) id name absName = resolve (Symb (IDENTIFIER $ name ++ "_C") m) False
     checkType _                                  id name absName = pure $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
 
     isDefined :: (ID, TableEntry) -> AbsoluteName -> SymbolStack -> Bool
@@ -365,13 +375,13 @@ updateScopeId = do
             Nothing -> Global
     setState (inp, (parentScope, ns, symbolStack), (nextId, table))
 
-defineTypeEntry (Symb (ResolvedName typeId absName) m) sameNameCons consIds = do
+defineTypeEntry (Symb (ResolvedName typeId absName) m) sameNameCons consIds details = do
     scope <- getScope
-    updateEntry typeId $ EntryTCons (Symb (ResolvedName typeId absName) m) absName scope $ Just (sameNameCons, SType consIds)
+    updateEntry typeId $ EntryTCons (Symb (ResolvedName typeId absName) m) absName scope $ Just (sameNameCons, SType consIds, Just details)
 
-defineRecordTypeEntry (Symb (ResolvedName typeId absName) m) sameNameCons consId memberIds = do
+defineRecordTypeEntry (Symb (ResolvedName typeId absName) m) sameNameCons consId memberIds details = do
     scope <- getScope
-    updateEntry typeId $ EntryTCons (Symb (ResolvedName typeId absName) m) absName scope $ Just (sameNameCons, RecType consId memberIds)
+    updateEntry typeId $ EntryTCons (Symb (ResolvedName typeId absName) m) absName scope $ Just (sameNameCons, RecType consId memberIds, Just details)
 
 push (Symb (ResolvedName id (name:|_)) _) = do
     (inp, (scopeId, ns, symbolStack), table) <- getState
@@ -411,6 +421,8 @@ getBoundParamIds = getSIds $ \(Param s _, _) -> s
 
 getSIds f = fmap $ \x -> symId $ f x
 
+getTable = getState >>= \(_, _, (_, t)) -> pure t
+
 type DefinedSymbols = M.Map ID Bool
 type SymbolStack = [DefinedSymbols]
 type ScopeState = (Scope, AbsoluteName, SymbolStack)
@@ -419,3 +431,21 @@ type NameResolver a = AbsParser State a
 
 intState :: Program -> TableState -> State
 intState p t = (p, (Global, "Global" :| [], []), t)
+
+getConsMaps :: Table -> Int -> [ValueCons] -> [M.Map Int Int]
+getConsMaps table tagSize = Prelude.map consMap
+
+    where
+    consMap (ValCons _ []) = M.empty
+    consMap (ValCons _ params) = M.fromList $ constructIndices tagSize (Prelude.map snd params) 0
+
+        where
+        constructIndices _ [] _ = []
+        constructIndices offset (t:ts) index = (index, offset) : constructIndices (offset + typeExprSize table t) ts (index + 1)
+
+consSize :: Table -> ValueCons -> Int
+consSize table (ValCons s params) = g $ Prelude.map snd params
+    where g = foldr (\a b -> typeExprSize table a + b) 0
+
+typeExprSize table t = case t of
+    TCons s -> fromMaybe 8 $ primitiveType table s

@@ -17,7 +17,9 @@ You should have received a copy of the GNU General Public License
 along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
-module Frontend.SyntacticAnalysis.Parser where
+module Frontend.SyntacticAnalysis.Parser
+
+where
 
 import Frontend.AbstractSyntaxTree
 import CompilerUtilities.ProgramTable
@@ -34,11 +36,33 @@ import qualified Frontend.LexicalAnalysis.Scanner
 import Frontend.LexicalAnalysis.Token
 
 -- | Parses the given token stream and returns syntax tree.
-parseTokens :: [Token] -> (Program, TableState)
-parseTokens src = case parse program $ initParserState src of
+parseTokens :: [Token] -> ProgramState
+parseTokens src = case parse program $ initParserState src initializeTable of
     Left (p, ([], _, _, t, err)) -> (p, t)
     Left (p, (ts, _, _, t, err)) -> error $ "Parser did not consume input. Remaining: " ++ show ts
     Right _ -> error "Syntax error."
+
+parseTokensStdLib :: [Token] -> [Token] -> ProgramState
+parseTokensStdLib stdLib src = case parse standardLibrary $ initParserState stdLib (0, M.empty) of
+    Left (Program stdLibElements, ([], _, _, t, err)) -> case parse program $ initParserState src (initializeTableWith t) of
+        Left (Program pes, ([], _, _, t, err)) -> (Program (stdLibElements ++ pes), t)
+        Left (p, (ts, _, _, t, err)) -> error $ "Parser did not consume input. Remaining: " ++ show ts
+        Right _ -> error "Syntax error."
+    
+    Left (p, (ts, _, _, t, err)) -> error $ "Standard Library: Parser did not consume input. Remaining: " ++ show ts
+    Right _ -> error "Standard Library: Syntax error."
+
+standardLibrary :: Parser Program
+standardLibrary = Program <$> many typesValues
+    where
+    typesValues = do
+        ts <- typeDef
+        many wspace
+        pure ts
+        <|> do
+        vs <- valueDef
+        many wspace
+        pure vs
 
 program :: Parser Program
 program = do
@@ -385,8 +409,8 @@ type ErrorState = [String]
 type ScopeState = (Scope, AbsoluteName)
 type ParserState = ([Token], ScopeState, MiscState, TableState, ErrorState)
 
-initParserState :: [Token] -> ParserState
-initParserState tokens = (tokens, (Global, "Global" :| []), (0, 0), initializeTable, [])
+initParserState :: [Token] -> TableState -> ParserState
+initParserState ts t = (ts, (Global, "Global" :| []), (0, 0), t, [])
 
 type Parser a = AbsParser ParserState a
 

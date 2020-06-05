@@ -27,6 +27,7 @@ where
 import CompilerUtilities.AbstractParser
 import Frontend.LexicalAnalysis.Token
 import Control.Applicative
+import Data.List.Utils
 import qualified Data.Char
 
 -- |Scans the given string and returns list of tokens.
@@ -44,21 +45,18 @@ keywordsIdent = do
             T (TkIdent (IDENTIFIER s)) _ -> s
             T (TkSymb (IDENTIFIER s)) _ -> s
     case getKeyword name of
-        Just t -> return t
-        Nothing -> return id
+        Just t -> pure t
+        Nothing -> pure id
 
 getKeyword str = case parse keywords (initState str) of
     Left (kword, (Str [] _, [])) -> Just kword
     _ -> Nothing
 
-initState :: String -> LexerState
-initState str = (Str str (Meta 1 1 ""), [])
-
 keyword :: String -> TokenType -> Lexer Token
 keyword word t = do
     m <- getMeta
     x <- tryString word
-    return $ T t m
+    pure $ T t m
 
 trash = wspaces <|> comment
 
@@ -66,13 +64,13 @@ wspaces = do
     m <- getMeta
     do 
         some space
-        return $ T (WHITESPACE Space) m
+        pure $ T (WHITESPACE Space) m
         <|> do
         some tab
-        return $ T (WHITESPACE Tab) m 
+        pure $ T (WHITESPACE Tab) m 
         <|> do
         some line
-        return $ T (WHITESPACE Newline) m
+        pure $ T (WHITESPACE Newline) m
 
 symbolsLiterals = literals <|> symbols
 
@@ -130,7 +128,7 @@ ident = do
     m <- getMeta
     x <- alpha
     xs <- many alphanum
-    return (T (TkIdent $ IDENTIFIER (x:xs)) m)
+    pure $ T (TkIdent $ IDENTIFIER (x:xs)) m
     <|> identSymbols
 
 identSymbols :: Lexer Token
@@ -151,7 +149,7 @@ identSymbols = do
         <|> tryChar '<'
         <|> tryChar '>'
         <|> tryChar '?'
-    return (T (TkSymb $ IDENTIFIER s) m)
+    pure $ T (TkSymb $ IDENTIFIER s) m
 
 -- Comments ending with file ending are not supported.
 comment :: Lexer Token
@@ -166,11 +164,11 @@ numberLit = do
     m <- getMeta
     tryChar '-'
     n <- some digit
-    return (T (TkLit $ NUMBER (-(read n))) m)
+    pure $ T (TkLit $ NUMBER (-(read n))) m
     <|> do
     m <- getMeta
     n <- some digit
-    return (T (TkLit $ NUMBER (read n)) m)
+    pure $ T (TkLit $ NUMBER (read n)) m
 
 charLit :: Lexer Token
 charLit = do
@@ -179,7 +177,7 @@ charLit = do
     do
         c <- alphanum
         tryChar '\''
-        return (T (TkLit $ CHAR c) m)
+        pure $ T (TkLit $ CHAR c) m
         <|> failToken "Mismatched \'." m
 
 stringLit :: Lexer Token
@@ -189,7 +187,7 @@ stringLit = do
     do
         x <- many alphanumSpace
         tryChar '"'
-        return (T (TkLit $ STRING x) m)
+        pure $ T (TkLit $ STRING x) m
         <|> failToken "Mismatched \"." m
 
 unitLit :: Lexer Token
@@ -197,31 +195,31 @@ unitLit = do
     m <- getMeta
     tryChar '('
     tryChar ')'
-    return (T (TkLit UNIT) m)
+    pure $ T (TkIdent (IDENTIFIER "Unit")) m
 
 semicolon :: Lexer Token
 semicolon = do
     m <- getMeta
     tryChar ';'
-    return (T SEMICOLON m)
+    pure $ T SEMICOLON m
 
 space :: Lexer Token
 space = do
     m <- getMeta
     ws <- whitespace
-    return (T (WHITESPACE Space) m)
+    pure $ T (WHITESPACE Space) m
 
 tab :: Lexer Token
 tab = do
     m <- getMeta
     t <- horizontaltab
-    return (T (WHITESPACE Tab) m)
+    pure $ T (WHITESPACE Tab) m
 
 line :: Lexer Token
 line = do
     m <- getMeta
     nl <- newline
-    return (T (WHITESPACE Newline) m)
+    pure $ T (WHITESPACE Newline) m
 
 failToken :: String -> Metadata -> Lexer Token
 failToken message m = P $ \(src, err) -> Left (T (Invalid message) m, (src, err ++ [formMessage message m]))
@@ -233,6 +231,9 @@ failToken' message = P $ \(Str s m, err) -> Left (T (Invalid message) m, (Str s 
 type Error = String
 type LexerState = (StrSource, [Error])
 type Lexer a = AbsParser LexerState a
+
+initState :: String -> LexerState
+initState str = (Str str (Meta 1 1 ""), [])
 
 -- State Manipulation
 
@@ -264,7 +265,7 @@ sat :: (Char -> Bool) -> Lexer Char
 sat p = do
     x <- item
     if p x
-    then return x
+    then pure x
     else empty
 
 tryChar :: Char -> Lexer Char
@@ -286,11 +287,11 @@ alphanumSpace :: Lexer Char
 alphanumSpace = alphanum <|> whitespace <|> horizontaltab
 
 tryString :: String -> Lexer String
-tryString [] = return ""
+tryString [] = pure ""
 tryString (x:xs) = do
     tryChar x
     tryString xs
-    return (x:xs)
+    pure $ x:xs
 
 alpha :: Lexer Char
 alpha = sat Data.Char.isAlpha
@@ -298,6 +299,28 @@ alpha = sat Data.Char.isAlpha
 digit :: Lexer Char
 digit = sat Data.Char.isDigit
 
+resolveStrLiteral (T (TkLit (STRING s)) m) = T LPAREN m : g s ++ [T RPAREN m]
+    where
+    g = foldr (\c cs -> cons c ++ [T COMMA m, T LPAREN m] ++ cs ++ [T RPAREN m, T RPAREN m]) [T (TkIdent (IDENTIFIER "Nil")) m]
+
+    cons c = [T (TkIdent (IDENTIFIER "Cons")) m, T LPAREN m, T (TkLit (CHAR c)) m]
+
 scanProcessed str = case scan str of
-    (tokens, []) -> Right $ Prelude.filter (not.isSpaceToken) tokens
+    (tokens, []) -> let processedTokens = filter (not.isSpaceToken) tokens
+                        resolvedStrLiterals = resolveStringLiterals processedTokens
+                    in Right resolvedStrLiterals
     (_, err) -> Left err
+
+    where
+    resolveStringLiterals ts = 
+        let literalTokens = filter isLit ts
+        in replaceEach literalTokens ts
+
+        where
+        replaceEach [] ts = ts
+        replaceEach (lit:lits) tokens =
+            let replaced = replace [lit] (resolveStrLiteral lit) tokens
+            in replaceEach lits replaced
+
+        isLit (T (TkLit (STRING _)) _) = True
+        isLit _ = False
