@@ -19,34 +19,33 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
 module Frontend.TypeSystem.TypeChecker
--- (
-    -- typeCheck
--- )
+(
+    typeCheck
+)
 where
 
 import Data.List.NonEmpty (NonEmpty((:|)), fromList, toList)
 import qualified Data.List.NonEmpty as NE
-import Control.Applicative (many, empty)
 import Control.Monad (unless)
+import Control.Monad.State
 import Data.Maybe (fromJust)
 import Frontend.AbstractSyntaxTree
 import qualified Data.Map.Strict as M
 import Frontend.LexicalAnalysis.Token (Literal(..), Identifier(ResolvedName))
 import CompilerUtilities.ProgramTable
-import CompilerUtilities.AbstractParser (AbsParser(P), getState, setState, parse)
 import Frontend.TypeSystem.Inference.ConstraintGenerator
 import Frontend.TypeSystem.Inference.Unifier
 
 typeCheck :: Program -> TableState -> (Program, TableState, [Error])
-typeCheck p t = case parse program $! initState p t of
-    Right (p, (_, t, err)) -> (p, t, err)
+typeCheck p t = case runState program $! initState p t of
+    (p, (_, t, err)) -> (p, t, err)
 
-program = Program <$> many programElement
+program = do
+    (Program p, _, _) <- get
+    Program <$> mapM programElement p
 
-programElement :: TypeChecker ProgramElement
-programElement = do
-    elem <- next
-    case elem of
+programElement :: ProgramElement -> TypeChecker ProgramElement
+programElement elem = case elem of
         Ty _ -> pure elem
         Proc {} -> procedure elem
         Func {} -> function elem
@@ -213,13 +212,11 @@ assertNominal (TCons source) target = source `cmpSymb` target
 cmpSymb s1 s2 = symId s1 == symId s2
 
 type Error = String
-
 type TypeCheckerState = (Program, TableState, [Error])
+type TypeChecker a = State TypeCheckerState a
 
 initState :: Program -> TableState -> TypeCheckerState
 initState p t = (p, t, [])
-
-type TypeChecker a = AbsParser TypeCheckerState a
 
 -- | Define a symbol's type.
 defineVarType (Symb (ResolvedName id absName) m) varType = do
@@ -231,55 +228,17 @@ defineVarType (Symb (ResolvedName id absName) m) varType = do
 
 updateEntry :: ID -> TableEntry -> TypeChecker ()
 updateEntry id newEntry = do
-    (inp, (nextId, table), err) <- getState
-    table <- maybe empty pure (updateTableEntry id newEntry table)
-    setState (inp, (nextId, table), err)
+    (inp, (nextId, table), err) <- get
+    table <- maybe (error "[Char]") pure (updateTableEntry id newEntry table)
+    put (inp, (nextId, table), err)
 
 lookupType' :: ID -> TypeChecker (Maybe TypeExpression)
-lookupType' id = do
-    t <- getTable
-    case lookupTableEntry id t of
-        Just entry -> case entry of
-            EntryProc _ _ _ (Just (pIds, ret)) -> arrowType pIds ret
-            EntryFunc _ _ _ (Just (pIds, ret)) -> arrowType pIds ret
-            EntryLambda _ _ _ pIds (Just ret) -> arrowType pIds ret
-            EntryVar _ _ _ (Just t) -> pure $ Just t
-            -- EntryTVar t _ _ -> pure $ Just $ TVar t
-            EntryValCons _ _ _ (Just (retId, pIds)) -> do
-                let (Just retName) = getName retId t
-                let retType = TCons retName
-                case pIds of
-                    [] -> pure $ Just retType                 -- Nullary value constructor
-                    _ -> arrowType pIds retType
-            EntryTCons {} -> error $ "Expected value, but " ++ show id ++ " is a type."
-            _ -> pure Nothing
-        Nothing -> error $ "Bug: Unresolved symbol found: " ++ show id
-
-    where
-    getName id table = do
-        e <- lookupTableEntry id table
-        case e of
-            EntryTCons name _ _ _ -> pure name
-            _ -> error $ "Bug: getName called on entry of a non-type element. " ++ show id
-
-    arrowType pIds retType = do
-        paramType <- constructProductType pIds
-        pure $ Just $ TArrow paramType retType
-
-    constructProductType pIds = case pIds of
-        [x] -> consProdType x
-        _:_ -> TProd . fromList <$> mapM consProdType pIds
-
-        where consProdType x = fromJust <$> lookupType' x
+lookupType' id = lookupType id <$> getTable
 
 getTable :: TypeChecker Table
-getTable = getState >>= \(_, (_, table), _) -> pure table
+getTable = get >>= \(_, (_, table), _) -> pure table
 
-getTableState = getState >>= \(_, (id, table), _) -> pure (id, table)
-
-next = P $ \(Program elements, t, err) -> case elements of
-    x:xs -> Right (x, (Program xs, t, err))
-    [] -> Left (Program [], t, err)
+getTableState = get >>= \(_, (id, table), _) -> pure (id, table)
 
 inferType :: Expression -> TypeChecker ()
 inferType e = do
@@ -318,7 +277,8 @@ inferType e = do
             EntryTVar {} -> False
             _ -> True
 
-    setNextId nextId = getState >>= \(program, (_, table), err) -> setState (program, (nextId, table), err)
+    setNextId :: ID -> TypeChecker ()
+    setNextId nextId = get >>= \(program, (_, table), err) -> put (program, (nextId, table), err)
 
     updateTable (symbol, tExpr) = do
         table <- getTable
@@ -330,8 +290,12 @@ inferType e = do
         where
         arrowRight (_ `TArrow` r) = r
 
+        setTable :: Table -> TypeChecker ()
         setTable table = do
-            (program, (nextId, _), err) <- getState
-            setState (program, (nextId, table), err)
+            (program, (nextId, _), err) <- get
+            put (program, (nextId, table), err)
 
-addError message = P $ \(elements, t, err) -> Right ((), (elements, t, ("Type Error: " ++ message):err))
+addError :: String -> TypeChecker ()
+addError message = do
+    (a, b, c) <- get
+    put (a, b, ("Type Error: " ++ message):c)
