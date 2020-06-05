@@ -39,7 +39,7 @@ import Frontend.TypeSystem.Inference.Unifier
 
 typeCheck :: Program -> TableState -> (Program, TableState, [Error])
 typeCheck p t = case parse program $! initState p t of
-    Left (p, (_, t, err)) -> (p, t, err)
+    Right (p, (_, t, err)) -> (p, t, err)
 
 program = Program <$> many programElement
 
@@ -278,8 +278,8 @@ getTable = getState >>= \(_, (_, table), _) -> pure table
 getTableState = getState >>= \(_, (id, table), _) -> pure (id, table)
 
 next = P $ \(Program elements, t, err) -> case elements of
-    x:xs -> Left (x, (Program xs, t, err))
-    [] -> Right (Program [], t, err)
+    x:xs -> Right (x, (Program xs, t, err))
+    [] -> Left (Program [], t, err)
 
 inferType :: Expression -> TypeChecker ()
 inferType e = do
@@ -334,4 +334,4 @@ inferType e = do
             (program, (nextId, _), err) <- getState
             setState (program, (nextId, table), err)
 
-addError message = P $ \(elements, t, err) -> Left ((), (elements, t, ("Type Error: " ++ message):err))
+addError message = P $ \(elements, t, err) -> Right ((), (elements, t, ("Type Error: " ++ message):err))

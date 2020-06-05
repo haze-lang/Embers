@@ -33,9 +33,9 @@ import qualified Data.Char
 -- |Scans the given string and returns list of tokens.
 scan :: String -> ([Token], [Error])
 scan str = case parse (many root) (initState str) of
-    Left (tokens, (Str [] m, e)) -> (tokens, e)
-    Left (tokens, (Str leftover m, e)) -> (tokens, e)
-    Right (Str leftover m, e) -> ([], e)
+    Right (tokens, (Str [] m, e)) -> (tokens, e)
+    Right (tokens, (Str leftover m, e)) -> (tokens, e)
+    Left (Str leftover m, e) -> ([], e)
 
 root = trash <|> symbolsLiterals <|> keywordsIdent
 
@@ -49,7 +49,7 @@ keywordsIdent = do
         Nothing -> pure id
 
 getKeyword str = case parse keywords (initState str) of
-    Left (kword, (Str [] _, [])) -> Just kword
+    Right (kword, (Str [] _, [])) -> Just kword
     _ -> Nothing
 
 keyword :: String -> TokenType -> Lexer Token
@@ -222,10 +222,10 @@ line = do
     pure $ T (WHITESPACE Newline) m
 
 failToken :: String -> Metadata -> Lexer Token
-failToken message m = P $ \(src, err) -> Left (T (Invalid message) m, (src, err ++ [formMessage message m]))
+failToken message m = P $ \(src, err) -> Right (T (Invalid message) m, (src, err ++ [formMessage message m]))
     where formMessage str (Meta c l _) = "At line " ++ show l ++ ", cloumn " ++ show c ++ ": " ++ str
 
-failToken' message = P $ \(Str s m, err) -> Left (T (Invalid message) m, (Str s m, err ++ [formMessage message m]))
+failToken' message = P $ \(Str s m, err) -> Right (T (Invalid message) m, (Str s m, err ++ [formMessage message m]))
     where formMessage str (Meta c l _) = "At line " ++ show l ++ ", cloumn " ++ show c ++ ": " ++ str
 
 type Error = String
@@ -238,7 +238,7 @@ initState str = (Str str (Meta 1 1 ""), [])
 -- State Manipulation
 
 getMeta :: Lexer Metadata
-getMeta = P $ \(Str str m, err) -> Left (m, (Str str m, err))
+getMeta = P $ \(Str str m, err) -> Right (m, (Str str m, err))
 
 isSpaceToken (T (WHITESPACE Space) _) = True
 isSpaceToken _ = False
@@ -248,13 +248,13 @@ isCommentToken _ = False
 
 item :: Lexer Char
 item = P $ \inp -> case inp of
-    (Str [] m, err) -> Right inp
+    (Str [] m, err) -> Left inp
     (Str (x:xs) m, err) -> case x of
         '\r' -> case xs of
-            ('\n':bs) -> Left (x, (Str bs (incLine m), err))
-            _ -> Left (x, (Str xs (incLine m), err))
-        '\n' -> Left (x, (Str xs (incLine m), err))
-        _ -> Left (x, (Str xs (incCol m), err))
+            ('\n':bs) -> Right (x, (Str bs (incLine m), err))
+            _ -> Right (x, (Str xs (incLine m), err))
+        '\n' -> Right (x, (Str xs (incLine m), err))
+        _ -> Right (x, (Str xs (incCol m), err))
 
 -- Helpers
 

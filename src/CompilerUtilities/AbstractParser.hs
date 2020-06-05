@@ -23,44 +23,43 @@ module CompilerUtilities.AbstractParser
 where
 
 import Control.Applicative
-import Data.Char
 
-newtype AbsParser s a = P (s -> Either (a, s) s)
+newtype AbsParser s a = P (s -> Either s (a, s))
 
 instance Functor (AbsParser s) where
     -- fmap :: (a -> b) -> AbsParser a -> AbsParser b
     fmap f p = P $ \inp -> case parse p inp of
-                    Right m -> Right m
-                    Left (v, rest) -> Left (f v, rest)
+                    Left m -> Left m
+                    Right (v, rest) -> Right (f v, rest)
 
 instance Applicative (AbsParser s) where
     -- pure :: a -> AbsParser a
-    pure v = P $ \inp -> Left (v, inp)
+    pure v = P $ \inp -> Right (v, inp)
     -- <*> :: AbsParser (a -> b) -> AbsParser a -> AbsParser b
     pg <*> px = P $ \inp -> case parse pg inp of
-                    Right m -> Right m
-                    Left (v, rest) -> parse (fmap v px) rest
+                    Left m -> Left m
+                    Right (v, rest) -> parse (fmap v px) rest
 
 instance Monad (AbsParser s) where
     -- p >>= f :: AbsParser a -> (a -> Parer b) -> AbsParser b
     p >>= f = P $ \inp -> case parse p inp of
-                    Right m -> Right m
-                    Left (v, rest) -> parse (f v) rest
+                    Left m -> Left m
+                    Right (v, rest) -> parse (f v) rest
 
 instance Alternative (AbsParser s) where
     -- empty :: AbsParser a
-    empty = P $ \s -> Right s
+    empty = P $ \s -> Left s
     -- (<|>) :: AbsParser a -> AbsParser a -> AbsParser a
     p <|> q = P $ \inp -> case parse p inp of 
-                    Right m -> parse q inp
-                    Left (v, out) -> Left (v, out)
+                    Left m -> parse q inp
+                    Right (v, out) -> Right (v, out)
 
 -- | Extract the parser from P and apply it to inp.
-parse :: AbsParser s a -> s -> Either (a, s) s
+parse :: AbsParser s a -> s -> Either s (a, s)
 parse (P p) = p
 
 -- | Extract state from parser.
-getState = P $ \state -> Left (state, state)
+getState = P $ \state -> Right (state, state)
 
 -- | Discard current state and set it to given argument.
-setState state = P $ const $ Left ((), state)
+setState state = P $ const $ Right ((), state)

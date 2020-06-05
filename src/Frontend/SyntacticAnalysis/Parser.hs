@@ -38,19 +38,19 @@ import Frontend.LexicalAnalysis.Token
 -- | Parses the given token stream and returns syntax tree.
 parseTokens :: [Token] -> ProgramState
 parseTokens src = case parse program $ initParserState src initializeTable of
-    Left (p, ([], _, _, t, err)) -> (p, t)
-    Left (p, (ts, _, _, t, err)) -> error $ "Parser did not consume input. Remaining: " ++ show ts
-    Right _ -> error "Syntax error."
+    Right (p, ([], _, _, t, err)) -> (p, t)
+    Right (p, (ts, _, _, t, err)) -> error $ "Parser did not consume input. Remaining: " ++ show ts
+    Left _ -> error "Syntax error."
 
 parseTokensStdLib :: [Token] -> [Token] -> ProgramState
 parseTokensStdLib stdLib src = case parse standardLibrary $ initParserState stdLib (0, M.empty) of
-    Left (Program stdLibElements, ([], _, _, t, err)) -> case parse program $ initParserState src (initializeTableWith t) of
-        Left (Program pes, ([], _, _, t, err)) -> (Program (stdLibElements ++ pes), t)
-        Left (p, (ts, _, _, t, err)) -> error $ "Parser did not consume input. Remaining: " ++ show ts
-        Right _ -> error "Syntax error."
+    Right (Program stdLibElements, ([], _, _, t, err)) -> case parse program $ initParserState src (initializeTableWith t) of
+        Right (Program pes, ([], _, _, t, err)) -> (Program (stdLibElements ++ pes), t)
+        Right (p, (ts, _, _, t, err)) -> error $ "Parser did not consume input. Remaining: " ++ show ts
+        Left _ -> error "Syntax error."
     
-    Left (p, (ts, _, _, t, err)) -> error $ "Standard Library: Parser did not consume input. Remaining: " ++ show ts
-    Right _ -> error "Standard Library: Syntax error."
+    Right (p, (ts, _, _, t, err)) -> error $ "Standard Library: Parser did not consume input. Remaining: " ++ show ts
+    Left _ -> error "Standard Library: Syntax error."
 
 standardLibrary :: Parser Program
 standardLibrary = Program <$> many typesValues
@@ -417,8 +417,8 @@ type Parser a = AbsParser ParserState a
 -- State Manipulation
 item :: Parser Token
 item = P $ \(inp, name, lambdaNo, t, err) -> case inp of
-            (x:xs) -> Left (x, (xs, name, lambdaNo, t, err))
-            a -> Right (a, name, lambdaNo, t, err)
+            (x:xs) -> Right (x, (xs, name, lambdaNo, t, err))
+            a -> Left (a, name, lambdaNo, t, err)
 
 -- Parser Helpers
 
@@ -551,7 +551,7 @@ replaceTypeVars = foldr updateTypeVar
 -- Errors
 
 addError :: String -> Parser ()
-addError message = P $ \(inp, scope, lambdaNo, table, err) -> Left ((), (inp, scope, lambdaNo, table, ("Parse Error: " ++ message):err))
+addError message = P $ \(inp, scope, lambdaNo, table, err) -> Right ((), (inp, scope, lambdaNo, table, ("Parse Error: " ++ message):err))
 
 -- Scope
 
@@ -618,7 +618,7 @@ pushScopeLambda elem = do
 
     where
     freshLambdaNo = P $ \(inp, scope, (lambdaNo, vp), table, err) ->
-        Left (lambdaNo, (inp, scope, (lambdaNo + 1, vp), table, err))
+        Right (lambdaNo, (inp, scope, (lambdaNo + 1, vp), table, err))
 
 -- | Pops current scope, updating scope state to point to parent scope.
 endScope :: Parser ()
@@ -638,7 +638,7 @@ freshVirtualParam = do
     vpNo <- consumeVirtualParam
     pure $ Symb (IDENTIFIER ("_p" ++ show vpNo)) (Meta 0 0 "")
 
-    where consumeVirtualParam = P $ \(inp, scope, (lNo, vpNo), table, err) -> Left (vpNo, (inp, scope, (lNo, vpNo + 1), table, err))
+    where consumeVirtualParam = P $ \(inp, scope, (lNo, vpNo), table, err) -> Right (vpNo, (inp, scope, (lNo, vpNo + 1), table, err))
 
 defineNameInParent (Symb (IDENTIFIER name) m) elem = do
     s <- getState
@@ -663,5 +663,5 @@ defineNameInParent (Symb (IDENTIFIER name) m) elem = do
 insertEntry :: TableEntry -> Parser ID
 insertEntry entry = P $ \(inp, s, lambdaNo, (id, table), err) ->
     case insertTableEntry id entry table of
-        Just t -> Left (id, (inp, s, lambdaNo, (id + 1, t), err))
-        Nothing -> Right (inp, s, lambdaNo, (id, table), err)
+        Just t -> Right (id, (inp, s, lambdaNo, (id + 1, t), err))
+        Nothing -> Left (inp, s, lambdaNo, (id, table), err)

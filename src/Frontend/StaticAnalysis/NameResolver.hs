@@ -39,8 +39,8 @@ import Data.Foldable (foldlM)
 
 resolveNames :: (Program, TableState) -> (Program, TableState)
 resolveNames (p, t) = case parse program (intState p t) of
-    Left (resultProgram, (_, _, t)) -> (resultProgram, t)
-    Right a -> error "Initialization failed."
+    Right (resultProgram, (_, _, t)) -> (resultProgram, t)
+    Left a -> error "Initialization failed."
 
 program :: NameResolver Program  
 program = do
@@ -269,8 +269,8 @@ typeExpression (TProd ls) = TProd <$> mapM typeExpression ls
 
 next :: NameResolver ProgramElement
 next = P $ \(Program elements, s, t) -> case elements of
-    x:xs -> Left (x, (Program xs, s, t))
-    [] -> Right (Program [], s, t)
+    x:xs -> Right (x, (Program xs, s, t))
+    [] -> Left (Program [], s, t)
 
 -- Symbol Resolution
 
@@ -394,15 +394,15 @@ defineValCons (Symb (ResolvedName consId absName) m) typeId paramIds = do
     scope <- getScope
     updateEntry consId $ EntryValCons (Symb (ResolvedName consId absName) m) absName scope $ Just (typeId, paramIds)
 
-startLocals = P $ \(inp, (scopeId, absName, xs), table) -> Left ((), (inp, (scopeId, absName, M.empty:xs), table))
+startLocals = P $ \(inp, (scopeId, absName, xs), table) -> Right ((), (inp, (scopeId, absName, M.empty:xs), table))
 
 -- | Duplicates the top locals and pushes the copy.
-startLocalsUnionTop = P $ \(inp, (scopeId, absName, x:xs), table) -> Left ((), (inp, (scopeId, absName, x:(x:xs)), table))
+startLocalsUnionTop = P $ \(inp, (scopeId, absName, x:xs), table) -> Right ((), (inp, (scopeId, absName, x:(x:xs)), table))
 
-endLocals = P $ \(inp, (scopeId, absName, x:xs), table) -> Left ((), (inp, (scopeId, absName, xs), table))
+endLocals = P $ \(inp, (scopeId, absName, x:xs), table) -> Right ((), (inp, (scopeId, absName, xs), table))
 
 -- | Define in top local symbols table.
-defineLocal id = P $ \(inp, (scopeId, absName, x:xs), table) -> Left ((), (inp, (scopeId, absName, f id x:xs), table))
+defineLocal id = P $ \(inp, (scopeId, absName, x:xs), table) -> Right ((), (inp, (scopeId, absName, f id x:xs), table))
     where f id = M.insert id True
 
 -- | Update a variable's type expression to have resolved symbols.

@@ -41,11 +41,11 @@ import Data.List.NonEmpty (NonEmpty((:|)), (<|))
 
 initializeTable :: TableState
 initializeTable = case parse stdLib (0, (0, M.fromList [])) of
-    Left (_, (_, state)) -> state
+    Right (_, (_, state)) -> state
 
 initializeTableWith :: TableState -> TableState
 initializeTableWith tableState = case parse stdLib (0, tableState) of
-    Left (_, (_, state)) -> state
+    Right (_, (_, state)) -> state
 
 data TableEntry
     = EntryProc Symbol AbsoluteName Scope (Definition ([ParamId], ReturnType))
@@ -128,14 +128,14 @@ type TableManipulator a = AbsParser ManipulatorState a
 insertTableEntry' :: TableEntry -> TableManipulator ID
 insertTableEntry' entry = P $ \(p, (id, table)) ->
     case insertTableEntry id entry table of
-        Just t -> Left (id, (p, (id + 1, t)))
-        Nothing -> Right (p, (id, table))
+        Just t -> Right (id, (p, (id + 1, t)))
+        Nothing -> Left (p, (id, table))
 
 updateTableEntry' :: ID -> TableEntry -> TableManipulator ()
 updateTableEntry' id newEntry = P $ \(p, (id', table)) ->
     case updateTableEntry id newEntry table of
-        Just t -> Left ((), (p, (id', t)))
-        Nothing -> Right (p, (id', table))
+        Just t -> Right ((), (p, (id', t)))
+        Nothing -> Left (p, (id', table))
 
 boolType = _type boolId
 unitType = _type unitId
