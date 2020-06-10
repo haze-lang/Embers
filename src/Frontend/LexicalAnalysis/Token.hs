@@ -31,7 +31,7 @@ data Literal
     = NUMBER Int
     | CHAR Char
     | STRING String
-    deriving (Show,Eq)
+    deriving (Eq)
 
 data Identifier
     = IDENTIFIER String
@@ -72,3 +72,8 @@ instance Show Identifier where
 instance Show Metadata where
     show (Meta c l []) = show l ++ ":" ++ show c
     show (Meta c l f) = show f ++ ":" ++ show l ++ ":" ++ show c
+
+instance Show Literal where
+    show (NUMBER n) = show n
+    show (CHAR c) = show c
+    show (STRING s) = show s

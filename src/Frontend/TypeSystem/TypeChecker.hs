@@ -36,9 +36,9 @@ import CompilerUtilities.ProgramTable
 import Frontend.TypeSystem.Inference.ConstraintGenerator
 import Frontend.TypeSystem.Inference.Unifier
 
-typeCheck :: Program -> TableState -> (Program, TableState, [Error])
-typeCheck p t = case runState program $! initState p t of
-    (p, (_, t, err)) -> (p, t, err)
+typeCheck :: ProgramState -> (ProgramState, [Error])
+typeCheck (p, t) = case runState program $! initState p t of
+    (p, (_, t, err)) -> ((p, t), err)
 
 program = do
     (Program p, _, _) <- get

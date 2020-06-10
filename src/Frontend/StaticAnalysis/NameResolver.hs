@@ -31,6 +31,7 @@ import Frontend.LexicalAnalysis.Token
 import qualified Data.Char (isUpper)
 import qualified Data.Map.Strict as M
 import CompilerUtilities.ProgramTable
+import qualified CompilerUtilities.IntermediateProgram as IR
 import qualified Frontend.SyntacticAnalysis.Parser as P
 import Frontend.AbstractSyntaxTree
 import Data.List.NonEmpty as NE (NonEmpty((:|)), (<|), fromList, toList, map)
@@ -43,9 +44,7 @@ resolveNames (p, t) = case parse program (intState p t) of
     Left a -> error "Initialization failed."
 
 program :: NameResolver Program  
-program = do
-    elements <- many programElement
-    pure $ Program elements
+program = Program <$> many programElement
 
 programElement :: NameResolver ProgramElement
 programElement = do
@@ -54,7 +53,7 @@ programElement = do
         Ty t -> _type t
         Proc {} -> procedure elem
         Func {} -> function elem
-        ExpressionVar {} -> expr elem
+        ExpressionVar {} -> exprVal elem
 
 procedure :: ProgramElement -> NameResolver ProgramElement
 procedure (Proc paramType retType name body) = do
@@ -78,14 +77,14 @@ function (Func paramType retType name body) = do
 
 _type :: Type -> NameResolver ProgramElement
 _type (SumType (Symb (ResolvedName typeId absName) m) cons) = do
-    cons <- mapM valCons cons
+    cons <- valConstructors cons
     let sameCons = isSameConsName (getRelative absName) cons
     let consIds = getIds (toList cons)
     let tagSize = getTagSize (length consIds)
     t <- getTable
     let maxSize = tagSize + maximum (fmap (consSize t) cons)
     let consMaps = getConsMaps t tagSize (toList cons)
-    let details = (maxSize, consMaps)
+    let details = (IR.varSize tagSize, maxSize, consMaps)
     defineTypeEntry (Symb (ResolvedName typeId absName) m) sameCons consIds details
     pure $ Ty $ SumType (Symb (ResolvedName typeId absName) m) cons
 
@@ -94,11 +93,15 @@ _type (SumType (Symb (ResolvedName typeId absName) m) cons) = do
     getIds = getSIds $ \(ValCons cons _) -> cons
     isSameConsName typeName = foldr (\(ValCons name _) b -> (typeName ++ "_C") == symStr name || b) False
 
-    valCons (ValCons name params) = do
-        params <- boundParams params
-        let paramIds = getBoundParamIds params
-        defineValCons name typeId paramIds
-        pure (ValCons name params)
+    valConstructors cons = mapM valCons (NE.zip infiniteNE cons)
+        where
+        infiniteNE = 0:|[1..]
+
+        valCons (index, ValCons name params) = do
+            params <- boundParams params
+            let paramIds = getBoundParamIds params
+            defineValCons name index typeId paramIds
+            pure $ ValCons name params
 
 _type (Record typeName cons members) = do
     let (ValCons consName params) = cons
@@ -109,12 +112,12 @@ _type (Record typeName cons members) = do
     let (Symb (ResolvedName typeId _) _) = typeName
     params <- boundParams params
     let paramIds = getBoundParamIds params
-    defineValCons consName typeId paramIds
+    defineValCons consName 0 typeId paramIds
     let cons = ValCons consName params
     t <- getTable
     let size = consSize t cons
     let consMaps = getConsMaps t 0 [cons]
-    let details = (size, consMaps)
+    let details = (IR.Byte, size, consMaps)
     defineRecordTypeEntry typeName sameCons consId memberIds details
     pure $ Ty $ Record typeName cons (fromList members)
 
@@ -126,8 +129,8 @@ _type (Record typeName cons members) = do
         updateVarType name (TCons memType)
         pure (name, memType)
 
-expr :: ProgramElement -> NameResolver ProgramElement
-expr (ExpressionVar t name e) = do
+exprVal :: ProgramElement -> NameResolver ProgramElement
+exprVal (ExpressionVar t name e) = do
     t <- typeExpression t
     e <- expression e
     pure $ ExpressionVar t name e
@@ -390,9 +393,9 @@ push (Symb (ResolvedName id (name:|_)) _) = do
 
 getScope = (\(_, (scope, _, _), _) -> scope) <$> getState
 
-defineValCons (Symb (ResolvedName consId absName) m) typeId paramIds = do
+defineValCons (Symb (ResolvedName consId absName) m) index typeId paramIds = do
     scope <- getScope
-    updateEntry consId $ EntryValCons (Symb (ResolvedName consId absName) m) absName scope $ Just (typeId, paramIds)
+    updateEntry consId $ EntryValCons (Symb (ResolvedName consId absName) m) absName scope $ Just (index, typeId, paramIds)
 
 startLocals = P $ \(inp, (scopeId, absName, xs), table) -> Right ((), (inp, (scopeId, absName, M.empty:xs), table))
 

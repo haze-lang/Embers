@@ -23,7 +23,7 @@ module CompilerUtilities.ProgramTable
     Scope (..),
     ProgramState, TableState, ID, NextID, AbsoluteName, Table, TypeDetails, TypeDef(..),
     initializeTable, initializeTableWith, insertTableEntry, updateTableEntry, lookupTableEntry,
-    idToName, nameLookup, idToScope, lookupType,
+    idToName, nameLookup, idToScope, lookupType, exprType,
     boolId, unitId, stringId, intId, charId,
     primitiveType,
     getRelative
@@ -38,6 +38,7 @@ import qualified Data.Map.Strict as M
 import Frontend.LexicalAnalysis.Token
 import CompilerUtilities.AbstractParser
 import Data.List.NonEmpty (NonEmpty((:|)), (<|))
+import qualified CompilerUtilities.IntermediateProgram as IR
 
 initializeTable :: TableState
 initializeTable = case parse stdLib (0, (0, M.fromList [])) of
@@ -51,7 +52,7 @@ data TableEntry
     = EntryProc Symbol AbsoluteName Scope (Definition ([ParamId], ReturnType))
     | EntryFunc Symbol AbsoluteName Scope (Definition ([ParamId], ReturnType))
     | EntryLambda Symbol AbsoluteName Scope [ParamId] (Definition ReturnType)
-    | EntryValCons Symbol AbsoluteName Scope (Definition (TypeID, [ParamId]))
+    | EntryValCons Symbol AbsoluteName Scope (Definition (ConsIndex, TypeID, [ParamId]))
     | EntryVar Symbol AbsoluteName Scope (Definition VarType)
     | EntryTVar Symbol AbsoluteName Scope
     | EntryTCons Symbol AbsoluteName Scope (Definition (SameNameCons, TypeDef, Maybe TypeDetails))
@@ -64,14 +65,18 @@ type Table = Map ID TableEntry
 stdLib = do
     insertChar
     insertInt
+    insertNat
     insertPrint
     insertPlus
     insertMinus
+    insertReset
+    insertShift
 
 -- Standard Library Initialization
 
 insertChar = nextId >>= \id -> insertTypeEntry (getSymb "Char" id) [] False
 insertInt = nextId >>= \id -> insertTypeEntry (getSymb "Int" id) [] False
+insertNat = nextId >>= \id -> insertTypeEntry (getSymb "Nat" id) [] False
 
 insertPrint = insertProc "Print" param unitType
     where param = do
@@ -87,6 +92,16 @@ insertMinus = insertProc "-" param intType
     where param = do
             s <- intType
             pure [s, s]
+
+insertReset = insertProc "Reset" param unitType
+    where param = do
+            s <- unitType
+            pure [s `TArrow` s]
+
+insertShift = insertProc "Shift" param unitType
+    where param = do
+            s <- unitType
+            pure [((s `TArrow` s) `TArrow` s) `TArrow` s]
 
 insertProc nameStr paramTypes retType = do
     id <- nextId
@@ -213,6 +228,34 @@ nameLookup name table = case M.toList $ M.filter (search name) table of
         EntryVar _ entryName _ _ -> entryName == absName
         EntryTVar _ entryName _ -> entryName == absName
 
+exprType :: Table -> Expression -> TypeExpression
+exprType t (Lit l) = case l of
+    NUMBER _ -> TCons $ intId t
+    CHAR _ -> TCons $ charId t
+    STRING _ -> TCons $ stringId t
+
+exprType t (Ident (Symb (ResolvedName id _) _)) = fromJust $ lookupType id t
+
+exprType t (Tuple es) = TProd $ fmap (exprType t) es
+
+exprType t e@(Lambda _) = fromJust $ lookupType (symId $ name e) t
+    where
+    name (Lambda (FuncLambda n _ _)) = n
+    name (Lambda (ProcLambda n _ _)) = n
+
+exprType t (Conditional condition e1 e2) = exprType t e1
+
+exprType t (Switch e ((_, c):|_) def) = exprType t c
+
+exprType t (App l r) =
+    let tl = exprType t l
+        (TArrow paramType retType) = tl
+    in retType
+
+exprType t (Access e Tag) = error $ show e
+-- exprType t (Access e Tag) = exprType t e
+exprType t (Access e (Member index)) = error $ show e
+
 lookupType :: ID -> Table -> Maybe TypeExpression
 lookupType id t =
     case lookupTableEntry id t of
@@ -222,7 +265,7 @@ lookupType id t =
             EntryLambda _ _ _ pIds (Just ret) -> arrowType pIds ret
             EntryVar _ _ _ (Just t) -> Just t
             -- EntryTVar t _ _ -> pure $ Just $ TVar t
-            EntryValCons _ _ _ (Just (retId, pIds)) -> do
+            EntryValCons _ _ _ (Just (_, retId, pIds)) -> do
                 let (Just retName) = getName retId t
                 let retType = TCons retName
                 case pIds of
@@ -254,6 +297,7 @@ boolId = globalLookup "Bool"
 unitId = globalLookup "Unit"
 stringId = globalLookup "String"
 intId = globalLookup "Int"
+natId = globalLookup "Nat"
 charId = globalLookup "Char"
 
 primitiveType table s
@@ -288,13 +332,15 @@ type ReturnType = TypeExpression
 type Param = Identifier
 type VarType = TypeExpression
 type ValConsID = ID
+type ConsIndex = Int
 type FieldID = ID
 type SameNameCons = Bool
 type ParamId = ID
 type TypeID = ID
 type MaxSize = Int
+type TagSize = IR.Size
 type Ctor = Map Int Int     -- Array of offsets of constructor's fields; (0, x) = x is offset of first field, (1, y) = y is offset of second field
-type TypeDetails = (MaxSize, [Ctor])
+type TypeDetails = (TagSize, MaxSize, [Ctor])
 
 getRelative = NE.head
 
@@ -303,7 +349,7 @@ instance Show TableEntry where
     show (EntryProc name absName parentScope def) = "Procedure: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showArrDef def
     show (EntryLambda name absName parentScope params def) = "Lambda: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showLambda params def
     show (EntryTCons name absName parentScope def) = "Type: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showTypeDef def
-    show (EntryValCons name absName parentScope def) = "Value Constructor: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ show def
+    show (EntryValCons name absName parentScope def) = "Value Constructor: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showConsDef def
     show (EntryVar name absName parentScope def) = "Variable: " ++ showScope absName ++ "\tScope: " ++ show parentScope ++ "\t" ++ showRetType def
     show (EntryTVar name absName parentScope) = "Type Variable: " ++ showScope absName ++ "\tScope: " ++ show parentScope
 
@@ -316,10 +362,13 @@ showArrDef (Just (params, retId)) = "Parameters: " ++ show params ++ "\tReturn T
 showTypeDef Nothing = "Aliasing Constructor & Type: Undefined"
 showTypeDef (Just (sameName, tDef, details)) = "Aliasing Constructor: " ++ show sameName ++ "\tType: " ++ show tDef ++ showStruct details
 
-showStruct (Just (maxSize, ctors)) = "\tSize: " ++ show maxSize ++ "\tCtors: " ++ show ctors
+showStruct (Just (_, maxSize, ctors)) = "\tSize: " ++ show maxSize ++ "\tCtors: " ++ show ctors
 showStruct Nothing = "Structure N/A"
 
 showRetType Nothing = "Type: Undefined"
 showRetType (Just typeExpr) = "Type: " ++ show typeExpr
 
 showScope ls = drop 1 $ foldr (\a b -> b ++ "." ++ a) "" ls
+
+showConsDef Nothing = ""
+showConsDef (Just (index, typeId, pIds)) = "Index: " ++ show index ++ "\tParameters: " ++ show pIds ++ "\tTypeID: " ++ show typeId

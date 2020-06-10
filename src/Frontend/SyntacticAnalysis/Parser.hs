@@ -235,7 +235,7 @@ productType typeName = do
     cons <- consIdent
     cons <- pure $ handleSameCons cons typeName
     let (Symb (ResolvedName typeId _) _) = typeName
-    cons <- defineNameInParent cons (NullConstructor typeId)
+    cons <- defineNameInParent cons Constructor
     pure $ ValCons cons []
 
     where
@@ -386,8 +386,7 @@ _pattern = literal <|> tuplePattern <|> valConsPattern
     tuplePattern = do
         token LPAREN
         name <- definedIdent
-        args <- some $ token COMMA >> ident
-        args <- mapM (\x -> defineName x (ExprVal Nothing) >>= \x -> pure $ Ident x) args
+        args <- some $ token COMMA >> definedIdent >>= \x -> pure $ Ident x
         token RPAREN
         pure $ Tuple $ Ident name:|args
 
@@ -512,14 +511,14 @@ bindParams (TArrow (TProd exprList) retType) params = do
         TArrow _ _ ->
             if null ts && null ps
             then pure [(p, t)]
-            else error ""
+            else bParams (fromList ts) (fromList ps) >>= \xs -> pure $ (p, t):xs
         TCons _ -> handleProd (NE.reverse (t:|ts)) (NE.reverse (p:|ps)) []
         TVar _ -> handleProd (NE.reverse (t:|ts)) (NE.reverse (p:|ps)) []
         TApp _ _ -> handleProd (NE.reverse (t:|ts)) (NE.reverse (p:|ps)) []
         TProd prods ->
             if null ps
             then handleProd (NE.reverse prods) (NE.reverse (p:|ps)) []
-            else error "Arrow Operator is binary and maps exactly one parameter."
+            else bParams (fromList ts) (fromList ps) >>= \xs -> pure $ (p, t):xs
 
         where
         handleProd :: NonEmpty TypeExpression -> NonEmpty Parameter -> [(Parameter, TypeExpression)] -> Parser [(Parameter, TypeExpression)]
@@ -555,7 +554,7 @@ addError message = P $ \(inp, scope, lambdaNo, table, err) -> Right ((), (inp, s
 
 -- Scope
 
-data CurrentElement = Procedure | Function | NullConstructor ID | Constructor | Type | ExprVal (Maybe TypeExpression) | TypeVar
+data CurrentElement = Procedure | Function | Constructor | Type | ExprVal (Maybe TypeExpression) | TypeVar
     deriving Show
 
 resolveName name = do
@@ -601,7 +600,6 @@ beginScope (Symb (IDENTIFIER name) m) elem = do
         Procedure -> EntryProc (Symb (ResolvedName id absName) m) absName scopeId Nothing
         Function -> EntryFunc (Symb (ResolvedName id absName) m) absName scopeId Nothing
         Constructor -> EntryValCons (Symb (ResolvedName id absName) m) absName scopeId Nothing
-        NullConstructor typeId ->  EntryValCons (Symb (ResolvedName id absName) m) absName scopeId (Just (typeId, []))
         Type -> EntryTCons (Symb (ResolvedName id absName) m) absName scopeId Nothing
         ExprVal varType -> EntryVar (Symb (ResolvedName id absName) m) absName scopeId varType
         TypeVar -> EntryTVar (Symb (ResolvedName id absName) m) absName scopeId
@@ -651,7 +649,6 @@ defineNameInParent (Symb (IDENTIFIER name) m) elem = do
         Procedure -> EntryProc (Symb (IDENTIFIER name) m) absName parentScope Nothing
         Function -> EntryFunc (Symb (IDENTIFIER name) m) absName parentScope Nothing
         Constructor -> EntryValCons (Symb (IDENTIFIER name) m) absName parentScope Nothing
-        NullConstructor typeId -> EntryValCons (Symb (IDENTIFIER name) m) absName parentScope (Just (typeId, []))
         Type -> EntryTCons (Symb (IDENTIFIER name) m) absName parentScope Nothing
         ExprVal varType -> EntryVar (Symb (IDENTIFIER name) m) absName parentScope varType
 
