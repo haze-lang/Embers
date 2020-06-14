@@ -25,6 +25,7 @@ module Frontend.LexicalAnalysis.Scanner
 where
 
 import CompilerUtilities.AbstractParser
+import Frontend.AbstractSyntaxTree
 import Frontend.LexicalAnalysis.Token
 import Control.Applicative
 import Data.List.Utils

@@ -19,7 +19,6 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 
 module Frontend.AbstractSyntaxTree where
 
-import Frontend.LexicalAnalysis.Token
 import Data.List.NonEmpty
 
 newtype Program = Program [ProgramElement]
@@ -68,7 +67,7 @@ data TypeExpression
     deriving Eq
 
 data Expression
-    = Access Expression AccessMode         -- Acess elements of a tuple.
+    = Access Expression AccessMode         -- Acess elements of a tuple/product type.
     | App Expression Expression
     | Switch Expression (NonEmpty (Expression, Expression)) Expression
     | Conditional Expression Expression Expression
@@ -76,13 +75,31 @@ data Expression
     | Tuple (NonEmpty Expression)
     | Ident Symbol
     | Lit Literal
-    deriving (Eq)
+    deriving Eq
 
 data AccessMode
     = Tag
     | Member Int
     | ConsMember Int Int -- ConsIndex ValIndex
-    deriving (Eq)
+    deriving Eq
+
+data Literal
+    = NUMBER Int
+    | CHAR Char
+    | STRING String
+    deriving Eq
+
+data Identifier
+    = IDENTIFIER String
+    | ResolvedName Int (NonEmpty String)
+    deriving Eq
+
+data Metadata = Meta Column Line Filename
+    deriving Eq
+
+type Column = Int
+type Line = Int
+type Filename = String
 
 data Symbol = Symb Identifier Metadata
     deriving Eq
@@ -92,10 +109,6 @@ data LambdaExpression
     | FuncLambda Symbol (NonEmpty Parameter) Expression
     deriving (Show,Eq)
 
-data TypeError 
-    = UnificationFail TypeExpression TypeExpression
-    deriving Show
-
 -- Utilities
 
 symStr (Symb (IDENTIFIER x) _) = x
@@ -103,6 +116,8 @@ symStr (Symb (ResolvedName _ (x:|_)) _) = x
 
 symId (Symb (ResolvedName id _) _) = id
 symId (Symb (IDENTIFIER x) _) = error x
+
+cmpSymb s1 s2 = symId s1 == symId s2
 
 paramId (Param s _) = symId s
 
@@ -171,7 +186,8 @@ instance Show Expression where
     show (Conditional c e1 e2) = "if " ++ show c ++ " then " ++ show e1 ++ " else " ++ show e2
     show (Lambda l) = lambda l
         where
-        lambda (ProcLambda name params body) = printNE params " " ++ " => " ++ printNE body ";"
+        lambda (ProcLambda name params body) = printNE params " " ++
+            " => \n\t{\n\t\t" ++ printNE body "\n\t\t" ++ "\n\t}\n"
         lambda (FuncLambda name params e) = printNE params " " ++ " => " ++ show e ++ "\n"
 
     show (Tuple (x:|[])) = show x
@@ -182,6 +198,19 @@ instance Show Expression where
 
 instance Show Parameter where
     show (Param s _) = symStr s
+
+instance Show Identifier where
+    show (IDENTIFIER s) = s ++ "<>"
+    show (ResolvedName id (s:|_)) = s ++ "<" ++ show id ++ ">"
+
+instance Show Metadata where
+    show (Meta c l []) = show l ++ ":" ++ show c
+    show (Meta c l f) = show f ++ ":" ++ show l ++ ":" ++ show c
+
+instance Show Literal where
+    show (NUMBER n) = show n
+    show (CHAR c) = show c
+    show (STRING s) = show s
 
 printList [] _ = ""
 printList [x] _ = show x

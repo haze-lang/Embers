@@ -12,6 +12,9 @@ import Data.Maybe (fromMaybe, fromJust)
 import qualified Data.Map.Strict as M
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
+import Frontend.Simplification.Simplifier
+
+type AccessResolver a = ProgramSimplifier ResolverState a
 
 -- | Resolve pattern matches to corresponding member accesses.
 resolvePatternMatches :: ProgramState -> ProgramState
@@ -30,9 +33,7 @@ program = do
 
 procedure (Proc params retType name body) = Proc params retType name <$> mapM statement body
 
-function (Func params retType name body) = do
-    -- when (symStr name == "boolEquals") $ error $ show body
-    Func params retType name <$> expression body
+function (Func params retType name body) = Func params retType name <$> expression body
 
 statement s = case s of
     Assignment v e -> Assignment v <$> expression e
@@ -70,18 +71,15 @@ expression original@(Switch e cases def) = do
         pure (Ident cons, expr)
 
 expression (App l r) = do
-    -- case l of
-    --     -- Access {} -> pure (App l r)
-    --     _ -> do
-        l <- expression l
-        t <- getTable
-        let (paramType `TArrow` _) = exprType t l
-        case paramType of
-            TProd ps ->
-                case r of
-                    Ident _ -> pure $ App l $ g paramType r
-                    Tuple _ -> App l <$> expression r
-            _ -> App l <$> expression r
+    l <- expression l
+    t <- getTable
+    let (paramType `TArrow` _) = exprType t l
+    case paramType of
+        TProd ps ->
+            case r of
+                Ident _ -> pure $ App l $ g paramType r
+                Tuple _ -> App l <$> expression r
+        _ -> App l <$> expression r
 
     where
     g (TProd ts) (Ident s) = Tuple (NE.fromList $ h 0 (NE.toList ts))
@@ -123,9 +121,9 @@ markSequenceCons cons container es = f 0 $ NE.toList es
 
 mark :: Expression -> Symbol -> Int -> AccessResolver ()
 mark container s memberNo = do
-    (p, mapping) <- get
+    mapping <- getLocal
     let newMapping = M.insert s (Access container (Member memberNo)) mapping
-    put (p, newMapping)
+    putLocal newMapping
 
 markCons :: Symbol -> Expression -> Symbol -> Int -> AccessResolver ()
 markCons cons container s memberNo = do
@@ -137,12 +135,7 @@ markCons cons container s memberNo = do
 lookupAccess :: Symbol -> AccessResolver (Maybe Expression)
 lookupAccess s = M.lookup s <$> gets snd
 
-getTable :: AccessResolver Table
-getTable = gets fst >>= \(_, (_, t)) -> pure t
+type ResolverState = Map Symbol Expression
 
-type LocalState = Map Symbol Expression
-type ResolverState = (ProgramState, LocalState)
-type AccessResolver a = State ResolverState a
-
-initState :: ProgramState -> ResolverState
-initState p = (p, M.empty)
+initState :: ProgramState -> ProgramSimplifierState ResolverState
+initState = initializeState M.empty

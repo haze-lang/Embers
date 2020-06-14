@@ -33,6 +33,9 @@ import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
 import Frontend.AbstractSyntaxTree
 import CompilerUtilities.ProgramTable
+import Frontend.Simplification.Simplifier
+
+type LambdaResolver a = ProgramSimplifier ResolverState a
 
 -- TODO: Nested λs, unassigned λs, λs appearing in tuples e.g. x = (1, a => a + 1, 2), λs as last statement
 
@@ -41,7 +44,7 @@ resolveLambdas :: ProgramState -> ProgramState
 resolveLambdas s = case runState program (initState s) of
     (simplifiedProgram, ((_, tableState), _)) -> (simplifiedProgram, tableState)
 
-program :: Simplifier Program
+program :: LambdaResolver Program
 program = do
     (Program p, _) <- getProg
     pes <- mapM pe p
@@ -58,7 +61,18 @@ procedure (Proc ps retType name stmts) = Proc ps retType name <$> mapM statement
 
 function (Func ps retType name body) = Func ps retType name <$> expression body
 
-statement :: Statement -> Simplifier Statement
+lambda (ProcLambda name params@(p:|ps) stmts) = do
+    pushParamTable name
+    mapM_ markParam params
+    stmts <- mapM statement stmts
+    paramTable <- popParamTable
+    let extraParams = map symToParam (M.elems paramTable)
+    let newParams = p:|(ps ++ extraParams)
+    updateLambdaEntry name newParams
+    pure (ProcLambda name newParams stmts, paramTable)
+
+lambda f@FuncLambda {} = pure (f, M.empty)
+
 statement s = case s of
     Assignment left e -> case e of 
         Lambda l -> do
@@ -73,47 +87,70 @@ statement s = case s of
                 markCall left stateVars
                 pure $ Assignment left new
         _ -> Assignment left <$> expression e
-
     StmtExpr e -> StmtExpr <$> expression e
 
     where identName (Ident s) = s
 
-expression :: Expression -> Simplifier Expression
 expression e = case e of
     Lambda l -> do
         l <- fst <$> lambda l
         Ident <$> toProgramElement l
 
+    Ident s -> do
+        inside <- inLambda
+        if inside
+        then do
+            a <- isParam s
+            a' <- isGlobal s
+            if a || a'
+            then pure $ Ident s
+            else do
+                b <- paramLookup s
+                case b of
+                    Just s' -> pure $ Ident s'
+                    Nothing -> Ident <$> promoteToParam s
+        else pure $ Ident s
+
     App func@(Ident s) args -> do                 -- Call site
         a <- lookupCall s
         case a of
             Just vars -> pure (App (Access func (Member 0)) (extendArgs func args (length vars)))
-            Nothing -> App func <$> expression args
+            Nothing -> do
+                func <- expression func
+                App func <$> expression args
 
     App l@(Lambda _) args -> do                     -- TODO: State Capture
         l <- expression l
         args <- expression args
         expression $ App l args     -- One more expression pass to resolve call site (effective only after TODO above is implemented).
 
-    Conditional c e1 e2 -> do
-        c <- expression c
+    App func args -> do
+        func <- expression func
+        App func <$> expression args
+
+    Tuple es -> Tuple <$> mapM expression es
+
+    Conditional e1 e2 e3 -> do
         e1 <- expression e1
-        Conditional c e1 <$> expression e2
+        e2 <- expression e2
+        Conditional e1 e2 <$> expression e3
 
     Switch e cases def -> do
         e <- expression e
-        cases <- mapM _case cases
+        cases <- mapM _caseExpr cases
         Switch e cases <$> expression def
 
         where
-        _case (p, e) = do
+        _caseExpr (p, e) = do
             p <- expression p
             e <- expression e
             pure (p, e)
 
-    Tuple es -> Tuple <$> mapM expression es
+    Access e index -> do
+        e <- expression e
+        pure $ Access e index
 
-    _ -> pure e
+    Lit _ -> pure e
 
     where
     extendArgs func args count = case args of
@@ -125,64 +162,20 @@ expression e = case e of
         f 1 n = [Access func (Member n)]
         f remaining n = Access func (Member n) : f (remaining - 1) (n + 1) 
 
-lambda (ProcLambda name params@(p:|ps) stmts) = do
-    pushParamTable name
-    mapM_ markParam params
-    stmts <- mapM _statement stmts
-    paramTable <- popParamTable
-    let extraParams = map symToParam (M.elems paramTable)
-    let newParams = p:|(ps ++ extraParams)
-    updateLambdaEntry name newParams
-    pure (ProcLambda name newParams stmts, paramTable)
+inLambda :: LambdaResolver Bool
+inLambda = do
+    (pStack, _, _, _) <- getLocal
+    pure $ not $ null pStack
 
-lambda f@FuncLambda {} = pure (f, M.empty)
-
-_statement s = case s of
-    Assignment left e -> Assignment left <$> _expression e
-    StmtExpr e -> StmtExpr <$> _expression e
-
-_expression e@(Lit _) = pure e
-_expression (Ident s) = do
-    a <- isParam s
-    a' <- isGlobal s
-    if a || a'
-    then pure $ Ident s
-    else do
-        b <- paramLookup s
-        case b of
-            Just s' -> pure $ Ident s'
-            Nothing -> Ident <$> promoteToParam s
-_expression (Tuple es) = Tuple <$> mapM _expression es
-_expression (Conditional e1 e2 e3) = do
-    e1 <- _expression e1
-    e2 <- _expression e2
-    Conditional e1 e2 <$> _expression e3
-_expression (Switch e cases def) = do
-    e <- _expression e
-    cases <- mapM _caseExpr cases
-    Switch e cases <$> _expression def
-
-    where
-    _caseExpr (p, e) = do
-        p <- _expression p
-        e <- _expression e
-        pure (p, e)
-_expression (App func args) = do
-    func <- _expression func
-    App func <$> _expression args
-
-_expression (Access e index) = do
-    e <- _expression e
-    pure $ Access e index
-
-paramLookup :: Symbol -> Simplifier (Maybe Symbol)
+-- Whether symbol has been marked as a parameter.
+paramLookup :: Symbol -> LambdaResolver (Maybe Symbol)
 paramLookup s = do
     (pStack, _, _, _) <- getLocal
     let ((_, top):_) = pStack
     pure $ M.lookup s top
 
 -- | New parameter as a substitute for supplied state variable.
-promoteToParam :: Symbol -> Simplifier Symbol
+promoteToParam :: Symbol -> LambdaResolver Symbol
 promoteToParam s = do
     (prog, (nextId, table)) <- getProg
     (pStack, cTable, pSet, lambdas) <- getLocal
@@ -196,32 +189,35 @@ promoteToParam s = do
     put ((prog, (nextId + 1, updatedTable)), ((parent, newParamTable):rest, cTable, pSet, lambdas))
     pure newParam
 
-isGlobal :: Symbol -> Simplifier Bool
+isGlobal :: Symbol -> LambdaResolver Bool
 isGlobal s = do
     (_, (_, table)) <- getProg
-    case idToScope (symId s) table of
-        Global -> pure True
-        _ -> pure False
+    pure $ case idToScope (symId s) table of
+        Global -> True
+        _ -> False
 
 -- | Is original parameter.
-isParam :: Symbol -> Simplifier Bool
+isParam :: Symbol -> LambdaResolver Bool
 isParam s = do
     (_, _, pSet, _) <- getLocal
     pure $ S.member s pSet
 
 -- | Mark original parameters to be left unchanged.
-markParam :: Parameter -> Simplifier ()
+markParam :: Parameter -> LambdaResolver ()
 markParam (Param s _) = do
     (stack, cTable, pSet, lambdas) <- getLocal
     putLocal (stack, cTable, S.insert s pSet, lambdas)
 
-pushParamTable :: Symbol -> Simplifier ()
+pushParamTable :: Symbol -> LambdaResolver ()
 pushParamTable symb = do
     (stack, cTable, pSet, lambdas) <- getLocal
-    let newStack = (symb, M.empty):stack
+    let newStack = case stack of
+            [] -> (symb, M.empty):stack
+            (_, x):xs -> (symb, x):stack
+    -- let newStack = (symb, M.empty):stack
     putLocal (newStack, cTable, pSet, lambdas)
 
-popParamTable :: Simplifier ParamTable
+popParamTable :: LambdaResolver ParamTable
 popParamTable = do
     (stack, cTable, pSet, lambdas) <- getLocal
     case stack of
@@ -231,7 +227,7 @@ popParamTable = do
             -- pure $ map symToParam (M.elems paramTable)
         _ -> error "Corrupted stack."
 
-updateLambdaEntry :: Symbol -> NonEmpty Parameter -> Simplifier ()
+updateLambdaEntry :: Symbol -> NonEmpty Parameter -> LambdaResolver ()
 updateLambdaEntry name params = do
     (p, (nextId, table)) <- getProg
     let paramIDs = map paramId (NE.toList params)
@@ -250,17 +246,7 @@ markCall var stateVars = do
     (pStack, cTable, set, lambdas) <- getLocal
     putLocal (pStack, M.insert var stateVars cTable, set, lambdas)
 
-putProg :: ProgramState -> Simplifier ()
-putProg p = get >>= \(_, l) -> put (p, l)
-
-putLocal :: LocalState -> Simplifier ()
-putLocal l = get >>= \(p, _) -> put (p, l)
-
-getProg = gets fst
-getLocal = gets snd
-getTable = getProg >>= \(_, (_, t)) -> pure t
-
-updateVarType :: Symbol -> Symbol -> [Symbol] -> Simplifier ()
+updateVarType :: Symbol -> Symbol -> [Symbol] -> LambdaResolver ()
 updateVarType s lambdaName stateVars = do
     (p, (nextId, table)) <- getProg
     case fromJust $ M.lookup (symId s) table of
@@ -285,13 +271,10 @@ type CallSitesTable = Map Symbol [Expression]
 
 type ResolvedLambdas = [ProgramElement]
 
-type LocalState = ([(Symbol, ParamTable)], CallSitesTable, ParamSet, ResolvedLambdas)
-type SimplifierState = (ProgramState, LocalState)
+type ResolverState = ([(Symbol, ParamTable)], CallSitesTable, ParamSet, ResolvedLambdas)
 
-type Simplifier a = State SimplifierState a
-
-initState :: ProgramState -> SimplifierState
-initState (p, t) = ((p, t), ([], M.empty, S.empty, []))
+initState :: ProgramState -> ProgramSimplifierState ResolverState
+initState = initializeState ([], M.empty, S.empty, [])
 
 toProgramElement elem = do
     (name, elem) <- case elem of

@@ -20,23 +20,10 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 module Frontend.LexicalAnalysis.Token where
 
 import Data.List.NonEmpty
+import Frontend.AbstractSyntaxTree
 
-data Whitespace
-    = Space
-    | Tab
-    | Newline
+data Token = T TokenType Metadata
     deriving (Show,Eq)
-
-data Literal
-    = NUMBER Int
-    | CHAR Char
-    | STRING String
-    deriving (Eq)
-
-data Identifier
-    = IDENTIFIER String
-    | ResolvedName Int (NonEmpty String)
-    deriving Eq
 
 data TokenType
     = TYPE | RECORD | IF | THEN | ELSE | SWITCH | DEFAULT    -- Keywords
@@ -48,15 +35,11 @@ data TokenType
     | Invalid String
     deriving (Show,Eq)
 
-data Token = T TokenType Metadata
+data Whitespace
+    = Space
+    | Tab
+    | Newline
     deriving (Show,Eq)
-
-type Column = Int
-type Line = Int
-type Filename = String
-
-data Metadata = Meta Column Line Filename
-    deriving Eq
 
 incCol (Meta c l f) = Meta (c + 1) l f
 decCol (Meta c l f) = Meta (c - 1) l f
@@ -64,16 +47,3 @@ incLine (Meta c l f) = Meta 1 (l + 1) f
 
 data StrSource = Str String Metadata
     deriving Show
-
-instance Show Identifier where
-    show (IDENTIFIER s) = s ++ "<>"
-    show (ResolvedName id (s:|_)) = s ++ "<" ++ show id ++ ">"
-
-instance Show Metadata where
-    show (Meta c l []) = show l ++ ":" ++ show c
-    show (Meta c l f) = show f ++ ":" ++ show l ++ ":" ++ show c
-
-instance Show Literal where
-    show (NUMBER n) = show n
-    show (CHAR c) = show c
-    show (STRING s) = show s

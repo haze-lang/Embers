@@ -27,7 +27,6 @@ import Control.Monad (when)
 import Control.Applicative (many)
 import Data.Maybe (isJust, fromMaybe)
 import CompilerUtilities.AbstractParser
-import Frontend.LexicalAnalysis.Token
 import qualified Data.Char (isUpper)
 import qualified Data.Map.Strict as M
 import CompilerUtilities.ProgramTable

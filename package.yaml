@@ -13,6 +13,7 @@ tests:
 copyright: 2019 Syed Moiz Ur Rehman
 maintainer: syedmoizurrehman@hotmail.com
 dependencies:
+- speculate
 - MissingH
 - extra
 - mtl

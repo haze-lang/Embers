@@ -12,25 +12,18 @@ import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
 import Frontend.AbstractSyntaxTree
 import CompilerUtilities.ProgramTable
-import Frontend.LexicalAnalysis.Token (Literal(..))
 
-type Name = Symbol
+type Infer a = State InferState a
 
-type InferState = (ID, ID, Context, [Constraint])
-type Infer a = ExceptT TypeError (State InferState) a
+-- | Maps free variables to type variables 
+newtype Context = Context (M.Map Symbol TypeExpression)
 
--- Maps free variables to type variables 
-
-newtype Context = Context (M.Map Name TypeExpression)
-
--- Maps type variables to types
-
+-- | Maps type variables to types
 newtype Constraint = Constraint (TypeExpression, TypeExpression)
 
-generateConstraints :: Expression -> NextID -> M.Map Name TypeExpression -> Either TypeError (NextID, M.Map Name TypeExpression, [Constraint])
-generateConstraints e nextId c = case runState (runExceptT (expression e)) (initState nextId c) of
-    (Left err, _)  -> Left err
-    (Right t, (nextId, _, Context context, constraints)) -> Right (nextId, context, constraints)
+generateConstraints :: Expression -> NextID -> M.Map Symbol TypeExpression -> (NextID, M.Map Symbol TypeExpression, [Constraint])
+generateConstraints e nextId c = case runState (expression e) (initState nextId c) of
+    (t, (nextId, _, Context context, constraints)) -> (nextId, context, constraints)
 
 statement :: Statement -> Infer (Maybe TypeExpression)
 statement (StmtExpr e) = Just <$> expression e
@@ -106,7 +99,7 @@ newConstraint (n, t) = do
     (id, count, c, constraints) <- get
     put (id, count, c, Constraint (n, t):constraints)
 
-extend :: (Name, TypeExpression) -> Infer ()
+extend :: (Symbol, TypeExpression) -> Infer ()
 extend (n, t) = do
     (id, count, Context c, constraints) <- get
     let existing = M.lookup n c
@@ -125,7 +118,9 @@ fresh = do
 
 getContext = gets $ \(_, _, Context c, _) -> c
 
-initState :: ID -> M.Map Name TypeExpression -> InferState
+type InferState = (NextID, Int, Context, [Constraint])
+
+initState :: ID -> M.Map Symbol TypeExpression -> InferState
 initState nextId c = (nextId, 0, Context c, initConstraints)
 
 initConstraints :: [Constraint]

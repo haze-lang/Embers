@@ -24,7 +24,7 @@ module CompilerUtilities.ProgramTable
     ProgramState, TableState, ID, NextID, AbsoluteName, Table, TypeDetails, TypeDef(..),
     initializeTable, initializeTableWith, insertTableEntry, updateTableEntry, lookupTableEntry,
     idToName, nameLookup, idToScope, lookupType, exprType,
-    boolId, unitId, stringId, intId, charId,
+    boolId, unitId, stringId, intId, charId, plusId, minusId,
     primitiveType,
     getRelative
 )
@@ -35,7 +35,6 @@ import Data.Maybe (fromJust)
 import qualified Data.List.NonEmpty as NE
 import Frontend.AbstractSyntaxTree
 import qualified Data.Map.Strict as M
-import Frontend.LexicalAnalysis.Token
 import CompilerUtilities.AbstractParser
 import Data.List.NonEmpty (NonEmpty((:|)), (<|))
 import qualified CompilerUtilities.IntermediateProgram as IR
@@ -101,7 +100,7 @@ insertReset = insertProc "Reset" param unitType
 insertShift = insertProc "Shift" param unitType
     where param = do
             s <- unitType
-            pure [((s `TArrow` s) `TArrow` s) `TArrow` s]
+            pure [(s `TArrow` s) `TArrow` s]
 
 insertProc nameStr paramTypes retType = do
     id <- nextId
@@ -254,7 +253,10 @@ exprType t (App l r) =
 
 exprType t (Access e Tag) = error $ show e
 -- exprType t (Access e Tag) = exprType t e
-exprType t (Access e (Member index)) = error $ show e
+exprType t (Access e (Member index)) =
+    let eType = exprType t e
+    in case eType of
+        TProd ts -> ts NE.!! index
 
 lookupType :: ID -> Table -> Maybe TypeExpression
 lookupType id t =
@@ -299,7 +301,10 @@ stringId = globalLookup "String"
 intId = globalLookup "Int"
 natId = globalLookup "Nat"
 charId = globalLookup "Char"
+plusId = globalLookup "+"
+minusId = globalLookup "-"
 
+primitiveType :: Table -> Symbol -> Maybe Int
 primitiveType table s
     | symId s == symId (boolId table) = Just 1
     | symId s == symId (unitId table) = Just 1

@@ -1,27 +1,25 @@
 module Frontend.TypeSystem.Inference.Unifier
 (
-    solveConstraints
+    unify
 )
 where
 
+import Frontend.Error.TypeError
 import Frontend.AbstractSyntaxTree
 import CompilerUtilities.ProgramTable
-import Frontend.LexicalAnalysis.Token (Literal(NUMBER, STRING), Identifier(IDENTIFIER))
 import Data.Tuple.Extra (snd3, thd3)
 import Data.List.NonEmpty (NonEmpty((:|)))
 import qualified Data.List.NonEmpty as NE
 import Control.Monad.Extra (concatMapM)
 import Control.Monad.Except
 import Control.Monad.State
-import Debug.Trace (trace)
 import qualified Data.Map as M
+import Data.Map (Map)
 import Data.Maybe (isJust, fromMaybe)
 import Frontend.TypeSystem.Inference.ConstraintGenerator (Context(..), Constraint(..))
 
-type Name = Symbol
-
-solveConstraints :: (M.Map Name TypeExpression, [Constraint]) -> Either TypeError (M.Map Name TypeExpression)
-solveConstraints s = case evalState (runExceptT solve) (initState s) of
+unify :: (Map Symbol TypeExpression, [Constraint]) -> Either TypeError (Map Symbol TypeExpression)
+unify s = case evalState (runExceptT solve) (initState s) of
     Left err -> Left err
     Right (Context c) -> Right c
 
@@ -117,7 +115,8 @@ subs _ (TCons n) = TCons n
 type Unifier a = ExceptT TypeError (State SolveState) a
 
 type SolveState = (Context, [Constraint], Mapping)
-type Mapping = M.Map TypeVar TypeExpression
+type Mapping = Map TypeVar TypeExpression
+type TypeVar = Symbol
 
 addMapping :: (TypeExpression, TypeExpression) -> Unifier ()
 addMapping (TVar v, t) = do
@@ -145,8 +144,6 @@ getConstraints :: Unifier [Constraint]
 getConstraints = gets snd3
 
 initState (context, constraints) = (Context context, constraints, M.empty)
-
-type TypeVar = Name
 
 tVar (TVar v) = v
 tVar x = error $ show x
