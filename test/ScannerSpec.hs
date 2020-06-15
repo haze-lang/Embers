@@ -24,6 +24,7 @@ import Test.QuickCheck
 import CompilerUtilities.AbstractParser
 import Frontend.LexicalAnalysis.Scanner
 import Frontend.LexicalAnalysis.Token
+import Frontend.AbstractSyntaxTree
 
 testStream xs = testPass xs "token stream" scanner
 
@@ -67,7 +68,7 @@ scannerTest = hspec $ do
         testSingle "123" $ TkLit $ NUMBER 123
         testSingle "\'a\'" $ TkLit $ CHAR 'a'
         testSingle "\"asd\"" $ TkLit $ STRING "asd"
-        testSingle "()" $ TkLit UNIT
+        testSingle "()" $ TkIdent $ ide "Unit"
         testSingleFail "_sdasd" $ TkIdent $ ide "_sdasd"
         testSingleFail "1sdasd" $ TkIdent $ ide "1sdasd"
     describe "Token Stream" $ do
@@ -80,7 +81,8 @@ scannerTest = hspec $ do
 -- Helpers & Utility
 
 scanner inp = case scan inp of
-    (tokens, _) -> tokenTypes tokens
+    Right tokens -> tokenTypes tokens
+    Left _ -> []
 
 testPass inp label f g = it ("scans " ++ label ++ " " ++ show inp) $ f inp `shouldBe` g
 

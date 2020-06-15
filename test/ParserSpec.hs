@@ -23,6 +23,7 @@ import Test.Hspec
 import Data.List.NonEmpty
 import Test.QuickCheck
 import CompilerUtilities.AbstractParser
+import qualified CompilerUtilities.ProgramTable as T
 import Frontend.LexicalAnalysis.Token
 import Frontend.AbstractSyntaxTree
 import qualified Frontend.SyntacticAnalysis.Parser as P
@@ -59,7 +60,7 @@ import qualified Frontend.SyntacticAnalysis.Parser as P
 
 -- testProgram = testPass "program structure" program
 
-funcExpr e = Program [Func [(Param (symb "a") ByVal, TSymb (symb "Int"))] (TSymb (symb "Int")) (symb "f") e]
+funcExpr e = Program [Func [(Param (symb "a") ByVal, TCons (symb "Int"))] (TCons (symb "Int")) (symb "f") e]
 
 testParser strInp ts = testPass (tokens ts) ("program: \n" ++ strInp) parser
 
@@ -88,7 +89,7 @@ parserTest = hspec $ do
 
         testExpr "Print" [tkIdent "Print"] (identE "Print")
 
-        testStatement "Stream = FileStream ()" [tkIdent "Stream", EQUALS, tkIdent "FileStream", TkLit UNIT] (Assignment (symb "Stream") (App (identE "FileStream") (Lit UNIT)))
+        testStatement "Stream = FileStream ()" [tkIdent "Stream", EQUALS, tkIdent "FileStream", tkIdent "Unit"] (Assignment (symb "Stream") (App (identE "FileStream") (identE "Unit")))
 
         testStatement "Print \"A\"" [tkIdent "Print", tkStr "A"] (StmtExpr $ App (identE "Print") (Lit $ str "A"))
 
@@ -112,7 +113,7 @@ parserTest = hspec $ do
 
         -- testTypeSignature "Main : A -> B" [tkIdent "Main", COLON, tkIdent "A", ARROW, tkIdent "B"] (TypeSig (ide "Main") (TMap (TName $ ide "A") (TName $ ide "B")))
 
-        testProc "Main : Unit -> Unit\nMain a\n{\nPrint \"A\"\n}" [tkIdent "Main", COLON, tkIdent "Unit", ARROW, tkIdent "Unit", WHITESPACE Newline, tkIdent "Main", tkIdent "a", WHITESPACE Newline, LBRACE, WHITESPACE Newline, tkIdent "Print", tkStr "A", WHITESPACE Newline, RBRACE] (Proc [(Param (symb "a") ByVal, TSymb $ symb "Unit")] (TSymb $ symb "Unit") (symb "Main") (StmtExpr (App (identE "Print") (Lit $ str "A")) :| []))
+        testProc "Main : Unit -> Unit\nMain a\n{\nPrint \"A\"\n}" [tkIdent "Main", COLON, tkIdent "Unit", ARROW, tkIdent "Unit", WHITESPACE Newline, tkIdent "Main", tkIdent "a", WHITESPACE Newline, LBRACE, WHITESPACE Newline, tkIdent "Print", tkStr "A", WHITESPACE Newline, RBRACE] (Proc [(Param (symb "a") ByVal, TCons $ symb "Unit")] (TCons $ symb "Unit") (symb "Main") (StmtExpr (App (identE "Print") (Lit $ str "A")) :| []))
 
         -- testFunction "id : A -> A\nid x = x" [tkIdent "id", COLON, tkIdent "A", ARROW, tkIdent "A", WHITESPACE Newline, tkIdent "id", tkIdent "x", EQUALS, tkIdent "x"] (Func (TypeSig (ide "id") (TMap (TName $ ide "A") (TName $ ide "A"))) (ide "id") ([ide "x"]) (ExprIdent $ ide "x"))
 
@@ -135,17 +136,17 @@ parserTest = hspec $ do
 parser ts = case P.parseTokens ts of
     (p, t) -> p
 
-expr src = case parse P.expression $ P.initParserState src of
-    Left (p, ([], _, _, t, err)) -> p
+expr src = case parse P.expression $ P.initParserState src T.initializeTable of
+    Right (p, ([], _, _, t, err)) -> p
 
-stmt src = case parse P.statement $ P.initParserState src of
-    Left (p, ([], _, _, t, err)) -> p
+stmt src = case parse P.statement $ P.initParserState src T.initializeTable of
+    Right (p, ([], _, _, t, err)) -> p
 
-block src = case parse P.block $ P.initParserState src of
-    Left (p, ([], _, _, t, err)) -> p
+block src = case parse P.block $ P.initParserState src T.initializeTable of
+    Right (p, ([], _, _, t, err)) -> p
 
-proc src = case parse P.procedure $ P.initParserState src of
-    Left (p, ([], _, _, t, err)) -> p
+proc src = case parse P.procedure $ P.initParserState src T.initializeTable of
+    Right (p, ([], _, _, t, err)) -> p
 
 testPass inp label f g = it ("parses " ++ label) $ f inp `shouldBe` g
 
