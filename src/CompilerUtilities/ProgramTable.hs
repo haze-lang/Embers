@@ -35,17 +35,17 @@ import Data.Maybe (fromJust)
 import qualified Data.List.NonEmpty as NE
 import Frontend.AbstractSyntaxTree
 import qualified Data.Map.Strict as M
-import CompilerUtilities.AbstractParser
+import Control.Monad.State
 import Data.List.NonEmpty (NonEmpty((:|)), (<|))
 import qualified CompilerUtilities.IntermediateProgram as IR
 
 initializeTable :: TableState
-initializeTable = case parse stdLib (0, (0, M.fromList [])) of
-    Right (_, (_, state)) -> state
+initializeTable = case runState stdLib (0, (0, M.fromList [])) of
+    (_, (_, state)) -> state
 
 initializeTableWith :: TableState -> TableState
-initializeTableWith tableState = case parse stdLib (0, tableState) of
-    Right (_, (_, state)) -> state
+initializeTableWith tableState = case runState stdLib (0, tableState) of
+    (_, (_, state)) -> state
 
 data TableEntry
     = EntryProc Symbol AbsoluteName Scope (Definition ([ParamId], ReturnType))
@@ -82,12 +82,12 @@ insertPrint = insertProc "Print" param unitType
             s <- charType
             pure [s]
 
-insertPlus = insertProc "+" param intType
+insertPlus = insertProc "_operator_p" param intType
     where param = do
             s <- intType
             pure [s, s]
 
-insertMinus = insertProc "-" param intType
+insertMinus = insertProc "_operator_m" param intType
     where param = do
             s <- intType
             pure [s, s]
@@ -137,19 +137,19 @@ getSymbIdent name = Symb (IDENTIFIER name) (Meta 0 0 "StandardLibrary.hz")
 
 type ManipulatorState = (Int, TableState)
 
-type TableManipulator a = AbsParser ManipulatorState a
+type TableManipulator a = State ManipulatorState a
 
 insertTableEntry' :: TableEntry -> TableManipulator ID
-insertTableEntry' entry = P $ \(p, (id, table)) ->
+insertTableEntry' entry = state $ \(p, (id, table)) ->
     case insertTableEntry id entry table of
-        Just t -> Right (id, (p, (id + 1, t)))
-        Nothing -> Left (p, (id, table))
+        Just t -> (id, (p, (id + 1, t)))
+        -- Nothing -> Left (p, (id, table))
 
 updateTableEntry' :: ID -> TableEntry -> TableManipulator ()
-updateTableEntry' id newEntry = P $ \(p, (id', table)) ->
+updateTableEntry' id newEntry = state $ \(p, (id', table)) ->
     case updateTableEntry id newEntry table of
-        Just t -> Right ((), (p, (id', t)))
-        Nothing -> Left (p, (id', table))
+        Just t -> ((), (p, (id', t)))
+        -- Nothing -> Left (p, (id', table))
 
 boolType = _type boolId
 unitType = _type unitId
@@ -157,17 +157,18 @@ stringType = _type stringId
 charType = _type charId
 intType = _type intId
 
+_type :: (Table -> Symbol) -> TableManipulator TypeExpression
 _type x = do
-    (_, table) <- snd <$> getState
+    (_, table) <- snd <$> get
     pure $ TCons $ x table
 
 nextId = do
-    (nId, _) <- snd <$> getState
+    (nId, _) <- snd <$> get
     return nId
 
 freshParam = do
-    (p, t) <- getState
-    setState (p + 1, t)
+    (p, t) <- get
+    put (p + 1, t)
     id <- nextId
     let name = "_p" ++ show p
     let param = getSymWithId id name

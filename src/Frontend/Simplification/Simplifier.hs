@@ -34,4 +34,3 @@ putLocal l = do
 
 getTable :: Simplifier (a, TableState) local Table
 getTable = snd . snd <$> getProg
-
