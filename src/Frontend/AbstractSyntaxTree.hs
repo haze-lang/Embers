@@ -86,13 +86,11 @@ data AccessMode
 data Literal
     = NUMBER Int
     | CHAR Char
-    | STRING String
     deriving Eq
 
 data Identifier
     = IDENTIFIER String
     | ResolvedName Int (NonEmpty String)
-    deriving Eq
 
 data Metadata = Meta Column Line Filename
     deriving Eq
@@ -102,7 +100,6 @@ type Line = Int
 type Filename = String
 
 data Symbol = Symb Identifier Metadata
-    deriving Eq
 
 data LambdaExpression
     = ProcLambda Symbol (NonEmpty Parameter) (NonEmpty Statement)
@@ -121,6 +118,8 @@ cmpSymb s1 s2 = symId s1 == symId s2
 
 paramId (Param s _) = symId s
 
+paramSym (Param s _) = s
+
 symToParam s = Param s ByVal
 
 getSym name = Symb (IDENTIFIER name) (Meta 0 0 "")
@@ -128,6 +127,13 @@ getSym name = Symb (IDENTIFIER name) (Meta 0 0 "")
 getSymWithId id name = Symb (ResolvedName id (name:|["Global"])) (Meta 0 0 "")
 
 symTrace (Symb (ResolvedName _ scopeTrace) _) = scopeTrace
+
+instance Eq Identifier where
+    (IDENTIFIER a) == (IDENTIFIER b) = a == b
+    (ResolvedName a _) == (ResolvedName b _) = a == b
+
+instance Eq Symbol where
+    (Symb a _) == (Symb b _) = a == b
 
 instance Ord Symbol where
     s1 `compare` s2 = symId s1 `compare` symId s2
@@ -210,7 +216,6 @@ instance Show Metadata where
 instance Show Literal where
     show (NUMBER n) = show n
     show (CHAR c) = show c
-    show (STRING s) = show s
 
 printList [] _ = ""
 printList [x] _ = show x

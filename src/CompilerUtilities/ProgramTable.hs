@@ -24,7 +24,7 @@ module CompilerUtilities.ProgramTable
     ProgramState, TableState, ID, NextID, AbsoluteName, Table, TypeDetails, TypeDef(..),
     initializeTable, initializeTableWith, insertTableEntry, updateTableEntry, lookupTableEntry,
     idToName, nameLookup, idToScope, lookupType, exprType,
-    boolId, unitId, stringId, intId, charId, plusId, minusId,
+    boolId, unitId, intId, charId,
     primitiveType,
     getRelative
 )
@@ -153,7 +153,6 @@ updateTableEntry' id newEntry = state $ \(p, (id', table)) ->
 
 boolType = _type boolId
 unitType = _type unitId
-stringType = _type stringId
 charType = _type charId
 intType = _type intId
 
@@ -232,7 +231,6 @@ exprType :: Table -> Expression -> TypeExpression
 exprType t (Lit l) = case l of
     NUMBER _ -> TCons $ intId t
     CHAR _ -> TCons $ charId t
-    STRING _ -> TCons $ stringId t
 
 exprType t (Ident (Symb (ResolvedName id _) _)) = fromJust $ lookupType id t
 
@@ -298,7 +296,6 @@ lookupType id t =
 
 boolId = globalLookup "Bool"
 unitId = globalLookup "Unit"
-stringId = globalLookup "String"
 intId = globalLookup "Int"
 natId = globalLookup "Nat"
 charId = globalLookup "Char"

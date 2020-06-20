@@ -27,7 +27,7 @@ data Token = T TokenType Metadata
 
 data TokenType
     = TYPE | RECORD | IF | THEN | ELSE | SWITCH | DEFAULT    -- Keywords
-    | BAR | EQUALS | COLON | COMMA | ARROW | LPAREN | RPAREN | LBRACE | RBRACE | DARROW | BSLASH | CROSS | SEMICOLON   -- Symbols
+    | BAR | DOT | EQUALS | COLON | COMMA | ARROW | IARROW | LPAREN | RPAREN | LBRACE | RBRACE | DARROW | BSLASH | CROSS | SEMICOLON   -- Symbols
     | TkIdent Identifier | TkSymb Identifier
     | TkLit Literal
     | WHITESPACE Whitespace

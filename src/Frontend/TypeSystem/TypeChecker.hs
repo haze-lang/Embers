@@ -103,7 +103,6 @@ statementType (StmtExpr e) = Just <$> expressionType e
 expressionType (Lit l) = case l of
     NUMBER _ -> f intId
     CHAR _ -> f charId
-    STRING _ -> error "String literal found."
 
     where f x = TCons . x <$> getTable
 

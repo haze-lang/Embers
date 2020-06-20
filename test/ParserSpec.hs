@@ -83,19 +83,19 @@ parserTest = hspec $ do
 
         testExpr "switch x\n0 -> 1;1 -> 1;default -> 0" [SWITCH, tkIdent "x", WHITESPACE Newline, tkNum 0, ARROW, tkNum 1, SEMICOLON, tkNum 1, ARROW, tkNum 1, SEMICOLON, DEFAULT, ARROW, tkNum 0] (Switch (identE "x") ((Lit $ NUMBER 0, Lit $ NUMBER 1) :| [(Lit $ NUMBER 1, Lit $ NUMBER 1)]) (Lit $ num 0))
 
-        testExpr "Print \"A\"" [tkIdent "Print", tkStr "A"] (App (identE "Print") (Lit $ str "A"))
+        testExpr "Print \"A\"" (tkIdent "Print":str "A") (App (identE "Print") (strExpr "A"))
 
-        testExpr "(Print) \"A\"" [LPAREN, tkIdent "Print", RPAREN, tkStr "A"] (App (identE "Print") (Lit $ str "A"))
+        testExpr "(Print) \"A\"" ([LPAREN, tkIdent "Print", RPAREN] ++ str "A") (App (identE "Print") (strExpr "A"))
 
         testExpr "Print" [tkIdent "Print"] (identE "Print")
 
         testStatement "Stream = FileStream ()" [tkIdent "Stream", EQUALS, tkIdent "FileStream", tkIdent "Unit"] (Assignment (symb "Stream") (App (identE "FileStream") (identE "Unit")))
 
-        testStatement "Print \"A\"" [tkIdent "Print", tkStr "A"] (StmtExpr $ App (identE "Print") (Lit $ str "A"))
+        testStatement "Print \"A\"" (tkIdent "Print":str "A") (StmtExpr $ App (identE "Print") (strExpr "A"))
 
         testExpr "a => add (a, 1)" [tkIdent "a", DARROW, tkIdent "add", LPAREN, tkIdent "a", COMMA, (tkNum 1), RPAREN] (Lambda $ FuncLambda (symb "_L0") (Param (symb "a") ByVal :| []) (App (identE "add") (Tuple (identE "a" :| [Lit $ NUMBER 1]))))
 
-        testBlock "{\nPrint \"A\"\n}" [LBRACE, WHITESPACE Newline, tkIdent "Print", tkStr "A", WHITESPACE Newline, RBRACE] ((StmtExpr $ App (identE "Print") (Lit $ str "A")) :| [])
+        testBlock "{\nPrint \"A\"\n}" ([LBRACE, WHITESPACE Newline, tkIdent "Print"] ++ str "A" ++ [WHITESPACE Newline, RBRACE]) ((StmtExpr $ App (identE "Print") (strExpr "A")) :| [])
 
         -- testTypeExpression "identifier" [tkIdent "A"] (TName $ ide "A")
 
@@ -113,7 +113,7 @@ parserTest = hspec $ do
 
         -- testTypeSignature "Main : A -> B" [tkIdent "Main", COLON, tkIdent "A", ARROW, tkIdent "B"] (TypeSig (ide "Main") (TMap (TName $ ide "A") (TName $ ide "B")))
 
-        testProc "Main : Unit -> Unit\nMain a\n{\nPrint \"A\"\n}" [tkIdent "Main", COLON, tkIdent "Unit", ARROW, tkIdent "Unit", WHITESPACE Newline, tkIdent "Main", tkIdent "a", WHITESPACE Newline, LBRACE, WHITESPACE Newline, tkIdent "Print", tkStr "A", WHITESPACE Newline, RBRACE] (Proc [(Param (symb "a") ByVal, TCons $ symb "Unit")] (TCons $ symb "Unit") (symb "Main") (StmtExpr (App (identE "Print") (Lit $ str "A")) :| []))
+        testProc "Main : Unit -> Unit\nMain a\n{\nPrint \"A\"\n}" ([tkIdent "Main", COLON, tkIdent "Unit", ARROW, tkIdent "Unit", WHITESPACE Newline, tkIdent "Main", tkIdent "a", WHITESPACE Newline, LBRACE, WHITESPACE Newline, tkIdent "Print"] ++ str "A" ++ [WHITESPACE Newline, RBRACE]) (Proc [(Param (symb "a") ByVal, TCons $ symb "Unit")] (TCons $ symb "Unit") (symb "Main") (StmtExpr (App (identE "Print") (strExpr "A")) :| []))
 
         -- testFunction "id : A -> A\nid x = x" [tkIdent "id", COLON, tkIdent "A", ARROW, tkIdent "A", WHITESPACE Newline, tkIdent "id", tkIdent "x", EQUALS, tkIdent "x"] (Func (TypeSig (ide "id") (TMap (TName $ ide "A") (TName $ ide "A"))) (ide "id") ([ide "x"]) (ExprIdent $ ide "x"))
 
@@ -152,12 +152,19 @@ testPass inp label f g = it ("parses " ++ label) $ f inp `shouldBe` g
 
 ide = IDENTIFIER
 num = NUMBER
-str = STRING
+-- str = STRING
+str s = LPAREN : g s ++ [RPAREN]
+    where
+    g = foldr (\c cs -> cons c ++ [COMMA, LPAREN] ++ cs ++ [RPAREN, RPAREN]) [TkIdent (IDENTIFIER "Nil")]
+    cons c = [TkIdent (IDENTIFIER "Cons"), LPAREN, TkLit (CHAR c)]
+
 tkIdent s = TkIdent $ ide s
 tkNum n = TkLit $ num n
-tkStr s = TkLit $ str s
+-- tkStr s = TkLit $ str s
 line = WHITESPACE Newline
 -- tkLit l = TkLit $ NUMBER l
+
+strExpr s = App (Lit $ num 1) (Lit $ num 2)
 
 tokens :: [TokenType] -> [Token]
 tokens = foldl (\aux tt -> aux ++ [T tt m]) []
