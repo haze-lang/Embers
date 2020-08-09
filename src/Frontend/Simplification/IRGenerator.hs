@@ -18,12 +18,11 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
 module Frontend.Simplification.IRGenerator
--- (
-    -- compileIR
--- )
+(
+    compileIR
+)
 where
 
-import Debug.Trace
 import Data.Maybe
 import Data.List
 import Data.List.NonEmpty (NonEmpty(..))
@@ -32,284 +31,255 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Control.Monad.State
 import Control.Monad.Except
-import Frontend.LexicalAnalysis.Token as T
 import Frontend.AbstractSyntaxTree
 import qualified Frontend.AbstractSyntaxTree as AST
 import CompilerUtilities.ProgramTable
 import CompilerUtilities.IntermediateProgram
 import qualified CompilerUtilities.IntermediateProgram as IR
+import Frontend.Simplification.Simplifier
+import CompilerUtilities.SourcePrinter
 
-compileIR :: ProgramState -> ([Routine], VarSizes)
-compileIR (p, (nextId, t)) = case runState program (initState (p, t)) of
-    (a, (_, (_, _, [], _, sizes))) -> (a, sizes)
+type IRGen a = Simplifier AstState GenState a
 
-program :: IRGen [Routine]
-program = do
-    (Program p, _) <- gets fst
-    mapM pe p
+compileIR :: ProgramState -> IRState
+compileIR (Program pes, (nextId, t)) = case runState (program initProgram) (initState t) of
+    (a, (_, (sizes, _, _))) -> (a, sizes)
+    where
+    initProgram = filter arrow pes
 
-pe p@Proc {} = procedure p
-pe f@Func {} = function f
+    arrow p@Proc {} = True
+    arrow f@Func {} = True
+    arrow _ = False
+
+program = mapM pe
+
+pe elem = do
+    block <- case elem of
+        Proc {} -> procedure elem
+        Func {} -> function elem
+    endProc
+    pure block
 
 procedure (Proc params retType name body) = do
-    params <- mapM parameter params
-
-    (_, last) <- lastStatement (NE.last body)
+    last <- lastStatement (NE.last body)
     body <- mapM statement (NE.init body)
     let (locals', instructions') = unzip body
     let instructions = concat instructions'
     let locals = nub $ catMaybes locals'
-    pure $ Routine name params locals (instructions ++ last)
+    pure $ Routine name (map fst params) locals (instructions ++ last)
 
 function (Func params retType name body) = do
-    params <- mapM parameter params
-    (_, body) <- lastStatement (StmtExpr body)
-    pure $ Routine name params [] body
+    body <- lastStatement (StmtExpr body)
+    pure $ Routine name (map fst params) [] body
+
+lastStatement :: Statement -> IRGen [Instruction]
+lastStatement stmt@(Assignment _ e) = do
+    (_, e) <- expression e
+    endBlock
+    pure (e ++ [Comment (printSource stmt), Return (Literal $ NUMBER 0), EndBlock])
 
 lastStatement stmt@(StmtExpr e) = do
-    (v, e) <- expressionVar e
-    pure (Nothing, Comment ("return " ++ show stmt) : e ++ [Return (LocalVar v)])
-lastStatement (Assignment _ r) = do
-    r <- expression r
-    pure (Nothing, r ++ [Return (Literal $ NUMBER 0)])
+    (r, e) <- expression e
+    endBlock
+    pure (Comment (printSource stmt) : e ++ [Return r, EndBlock])
 
-statement :: Statement -> IRGen (Maybe Var, [Instruction])
+statement :: Statement -> IRGen (Maybe Symbol, [Instruction])
 statement stmt@(Assignment s e) = do
-    (v, e) <- expressionVar e
-    t <- getAssociatedVar s
-    vSize <- getSize v
-    case vSize of
-        Just size -> updateSize t size
-        Nothing -> pure () --error $ show v
-
-    pure (Just t, Comment (show stmt) : e ++ [IR.Assign t (Unit $ LocalVar v)])
+    (r, e) <- expression e
+    -- t <- getAssociatedVar s
+    -- vSize <- getSize v
+    -- case vSize of
+    --     Just size -> updateSize t size
+    --     Nothing -> pure () --error $ show v
+    endBlock
+    pure (Just s, EndBlock:Comment (printSource stmt) : e ++ [Assign (S s) (Unit r)])
 
 statement stmt@(AST.StmtExpr e) = do
-    e <- expression e
-    pure (Nothing, Comment (show stmt) : e)
+    (_, e) <- expression e
+    endBlock
+    pure (Nothing, EndBlock:Comment (printSource stmt) : e)
 
-expression :: AST.Expression -> IRGen [Instruction]
-expression (App left right) = do
-    table <- getTable
-    if isCons left table
-    then allocate left (Just right)
-    else do
-        (loadIns, callee) <- case left of
-                Ident s -> pure ([], AstSymb s)
-                e -> do
-                    (v, eIns) <- expressionVar e
-                    pure (eIns, v)
+expression :: AST.Expression -> IRGen (UnitExpression, [Instruction])
+expression e = case e of
+    Conditional cond e1 e2 -> do
+        (r, condition) <- expression cond
+        thenLabel <- freshLabel
+        elseLabel <- freshLabel
+        contLabel <- freshLabel
+        (rThen, eThen) <- expression e1
+        (rElse, eElse) <- expression e2
 
-        case right of
-            Tuple es -> do
-                t <- getVar
-                (vars, exprs) <- NE.unzip <$> mapM expressionVar es
-                let argExprs = concat (NE.toList exprs)
-                let args = map LocalVar (NE.toList vars)
-                pure $ loadIns ++ argExprs ++ [Invoke callee args t]
-                -- pure [Invoke callee [] t]
+        temp <- freshTemp
+        let thenBlock = eThen ++ [Assign (V temp) (Unit rThen), Jump $ L contLabel]
+        let elseBlock = eElse ++ [Assign (V temp) (Unit rElse), Mark contLabel]
 
-            _ -> do
-                (v, e) <- expressionVar right
-                t <- getVar
-                pure $ e ++ [Invoke callee [LocalVar v] t]
-                -- pure [Invoke callee [] t]
+        let block = condition ++ [IR.ConditionalJump r Equals (Literal $ NUMBER 1) (L thenLabel), Jump $ L elseLabel] ++ Mark thenLabel : thenBlock ++ Mark elseLabel : elseBlock
 
+        pure (Ref $ V temp, block)
 
-expression e@(Ident s) = do
-    t <- getTable
-    if isCons e t
-    then allocate e Nothing
-    else if isArrow e t
-        then do
-            -- t <- getAssociatedVar s         -- TODO: AST Symbol
-            r <- getVar
-            pure [IR.Assign r (Unit $ LocalVar (AstSymb s))]
-        else
-        do
-        t <- irVar s
-        r <- getVar
-        pure [IR.Assign r (Unit $ LocalVar t)]
+    App left right -> do
+        table <- getProg
+        if isCons left table
+        then allocate left (Just right)
+        else do
+            (callee, loadIns) <- case left of
+                Ident s -> pure (S s, [])
+                _ -> do
+                    (r, e) <- expression left
+                    case r of Ref name -> pure (name, e)
 
-expression expr@(Conditional condition thenExpr elseExpr) = do
-    (condVar, condIns) <- expressionVar condition
+            case right of
+                Tuple args -> do
+                    t <- freshTemp
+                    (results, exprs) <- NE.unzip <$> mapM expression args
+                    let argExprs = concat (NE.toList exprs)
+                    -- let args = map LocalVar (NE.toList results)
+                    pure (Ref $ V t, loadIns ++ argExprs ++ [Invoke callee (NE.toList results) t])
 
-    t <- getVar
-    pushResultVar t
-    thenExpr <- expression thenExpr
-    elseExpr <- expression elseExpr
-    popResultVar
+                _ -> do
+                    (v, e) <- expression right
+                    t <- freshTemp
+                    pure (Ref $ V t, e ++ [Invoke callee [v] t])
 
-    thenLabel <- freshLabel
-    contLabel <- freshLabel
-    elseLabel <- freshLabel
-    thenExpr <- pure $ Mark thenLabel : thenExpr ++ [Jump contLabel]
+    Access expr Tag -> do
+        (r, e) <- expression expr
+        t <- freshTemp
+        table <- getProg
+        let (TCons cons) = exprType table expr
+        (tagSize, _, _) <- getTypeDetails cons
+        -- updateSize t tagSize
+        pure (Ref $ V t, e ++ [Load (V t) r 0])
 
-    elseExpr <- pure $ Mark elseLabel : elseExpr ++ [Mark contLabel]
+    Access expr member -> do
+        table <- getProg
+        (v, e) <- expression expr
+        (v, e2) <- resultVar v
+        t <- freshTemp
+        index <- case member of
+            Member index -> do
+                let eType@(TProd es) = exprType table expr
+                z <- typeSize (es NE.!! index)
+                -- updateSize v z
+                (size, offsets) <- tupleStructureType eType
+                pure $ offsets !! index
 
-    pure $ condIns ++ [IR.ConditionalJump (LocalVar condVar) Equals (Literal $ NUMBER 1) thenLabel, Jump elseLabel]
-        ++ thenExpr ++ elseExpr
+            ConsMember consIndex index -> do
+                let eType@(TCons cons) = exprType table expr
+                (_, _, ctors) <- getTypeDetails cons
+                pure $ fromJust $ M.lookup index $ ctors !! consIndex
+        pure (Ref $ V $ Temp (-200), e ++ [Load (V t) (Ref $ v) index])
 
-expression (Switch switch cases def) = do
-    (tag, e) <- expressionVar switch
-    t1 <- pushNewResultVar
-    popResultVar
+    Switch switch cases def -> expression switch
 
-    let firstCase = fst $ NE.head cases
-    ins <- case firstCase of
-        Lit _ -> pure []
+    Ident s -> do
+        t <- getProg
+        if isCons e t
+        then allocate e Nothing
+        else if isArrow e t
+            then do
+                -- t <- getAssociatedVar s         -- TODO: AST Symbol
+                -- r <- freshTemp
+                -- pure [IR.Assign r (Unit $ LocalVar t)]
+                pure (Ref $ S s, [])
+            else do
+                -- t <- irVar s
+                -- r <- getVar
+                -- pure [IR.Assign r (Unit $ LocalVar t)]
+                pure (Ref $ S s, [])
 
-        Ident cons -> do
-            table <- getTable
-            let (Access switchExpr Tag) = switch
-            let eType = exprType table switchExpr
-            let allConsIds = getAllCons eType table
-            let patternIds = fmap (\(Ident s) -> symId s) (fst $ NE.unzip cases)
-            let caseMap = M.fromList $ NE.toList $ NE.zip patternIds (snd $ NE.unzip cases)
-            defIns <- expression def
-            t <- getVar
-            pushResultVar t
-            endLabel <- freshLabel
-            (jmpExprs', caseExprs') <- unzip <$> mapM (eachCons caseMap defIns endLabel) allConsIds
-            popResultVar
-            let jmpExprs = concat jmpExprs'
-            let (Mark firstLabel) = head jmpExprs
-            let caseExprs = concat caseExprs'
-            -- t1 = tag * 2; tag = c1 + t1
-            let tagCalc = [Assign t1 (Bin (LocalVar tag) Mul (Literal $ T.NUMBER 2)),
-                    Assign tag (Bin (LocalVar t1) Add (LocalVar firstLabel)),
-                    Jump tag]
-            pure $ tagCalc ++ jmpExprs ++ caseExprs ++ [Mark endLabel]
+    Lit l -> pure (Literal l, [])
 
-    pure $ e ++ ins
-
-    where
-    eachCons caseMap def endLabel consId = do
-        l1 <- freshLabel
-        l1' <- freshLabel
-        caseIns <- case M.lookup consId caseMap of
-            Nothing -> pure def
-            Just e -> expression e
-
-        pure ([Mark l1, Jump l1'], Mark l1':(caseIns ++ [Jump endLabel]))
-
-    getAllCons (TCons s) table =
-        let (EntryTCons _ _ _ (Just (_, typeDef, _))) = fromJust $ M.lookup (symId s) table
-        in case typeDef of
-            SType ids -> ids
-            RecType id _ -> [id]
-
-expression e@(Tuple es) = do
-    (size, offsets) <- tupleStructure e
-    t <- getVar
-    updateSize t QWord
-    (vars, exprs) <- NE.unzip <$> mapM expressionVar es
-    let exprVarIndexOffset = zip4 (NE.toList exprs) (NE.toList vars) [0..] offsets
-    let ins = concatMap (storeExpr t) exprVarIndexOffset
-    pure $ Alloc t size : ins
-
-expression (Access expr Tag) = do
-    (v, e) <- expressionVar expr
-    t <- getVar
-    pure $ e ++ [Load t (LocalVar v) 0]
-
-expression (Access expr member) = do
-    table <- getTable
-    (v, e) <- expressionVar expr
-    t <- getVar
-    index <- case member of
-        Member index -> do
-            let eType@(TProd es) = exprType table expr
-            (size, offsets) <- tupleStructureType eType
-            pure $ offsets !! index
-
-        ConsMember consIndex index -> do
-            let eType@(TCons cons) = exprType table expr
-            (_, _, ctors) <- getTypeDetails cons
-            pure $ fromJust $ M.lookup index $ ctors !! consIndex
-    pure $ e ++ [Load t (LocalVar v) index]
-
-expression (Lit l) = do
-    t <- getVar
-    case l of
-        NUMBER _ -> updateSize t QWord
-        CHAR _ -> updateSize t Byte
-    pure [IR.Assign t (Unit $ Literal l)]
+    _ -> pure (Ref $ V $ Temp (-1), [])
 
 allocate (Ident s) Nothing = do
-    table <- getTable
+    -- error "a"
+    table <- getProg
     let (TCons retType) = fromJust $ lookupType (symId s) table
     (tagSize, size, ctors) <- getTypeDetails retType
     let (EntryValCons _ _ _ (Just (index, _, _))) = fromJust $ M.lookup (symId s) table
-    t <- getVar
-    updateSize t QWord
+    -- let t = Temp 200
+    -- t <- freshTemp
+    -- updateSize t QWord
     case primitiveType table retType of
-        Just _ -> updateSize t tagSize >> pure [Assign t $ Unit $ Literal (T.NUMBER index)]
-        Nothing -> pure [Alloc t size, Store t 0 (Literal $ T.NUMBER index)]
+        Just _ -> do
+            -- updateSize t tagSize
+            -- pure [Assign (V t) $ Unit $ Literal (NUMBER index)]
+            pure (Literal (NUMBER index), [])
+        -- Nothing -> pure [Alloc t size, Store t 0 (Literal $ NUMBER index)]
+        Nothing -> do
+            x <- getAllocMaster
+            case x of
+                Left t -> pure (Ref $ V t, [Alloc (V t) size, Store (V t) index (Literal $ NUMBER index)])
+                Right (t, index) -> pure (Ref $ V t, [Alloc (V t) size, Store (V t) index (Literal $ NUMBER index)])
 
 allocate (Ident cons) (Just right) = do
-    table <- getTable
+    table <- getProg
     let (pType `TArrow` (TCons retType)) = fromJust $ lookupType (symId cons) table
     (tagSize, size, ctors) <- getTypeDetails retType
     let (EntryValCons _ _ _ (Just (index, _, _))) = fromJust $ M.lookup (symId cons) table
-    t <- getVar
-    updateSize t QWord
-    alloc <- case right of
-        Ident s -> f t s ctors index Nothing
+    t <- freshTemp
+    -- updateSize t QWord
+    (r, alloc, bulk) <- case right of
+        -- Ident s -> f (V t) s ctors index Nothing
 
-        App (Ident s) right' -> f t s ctors index (Just right')
+        -- App (Ident s) right' -> f (V t) s ctors index (Just right')
 
         Tuple es -> do
-            (vars, exprs) <- NE.unzip <$> mapM expressionVar es
+            (vars', exprs) <- NE.unzip <$> mapM expression es
+            vars'' <- mapM resultVar vars'
+            let consCount = countCons es table
+            let (vars, es) = NE.unzip vars''
             let ctor = ctors !! index
             let offsets = map (\index -> fromJust $ M.lookup index ctor) [0..]
+            let fla = concat es
             let exprVarIndex = zip4 (NE.toList exprs) (NE.toList vars) [0..] offsets
-            pure $ concatMap (storeExpr t) exprVarIndex
+            xx <- pure $ concatMap (storeExpr t) exprVarIndex
+            pure (Ref $ V $ Temp (-100), fla++xx, consCount + 1)
 
         _ -> do
             let ctor = ctors !! index
             let offset = fromJust $ M.lookup 0 ctor
-            (v, x) <- expressionVar right
-            pure $ x ++ [Store t offset (LocalVar v)]
+            (v, x) <- expression right
+            xx <- pure $ x ++ [Store (V t) offset v]
+            pure (Ref $ V $ Temp (-100), xx, 1)
 
-    pure $ [Alloc t size, Store t 0 (Literal $ T.NUMBER index)] ++ alloc
+    pure $ (Ref $ V t, [Alloc (V t) (size*bulk), Store (V t) 0 (Literal $ NUMBER index)] ++ alloc)
 
     where
     f t s ctors index args = do
         let ctor = ctors !! index
         let offset = fromJust $ M.lookup 0 ctor
-        v <- pushNewResultVar
-        alloc <- allocate (Ident s) args
-        popResultVar
-        pure $ alloc ++ [Store t offset (LocalVar v)]
+        v <- freshTemp
+        -- v <- pushNewResultVar
+        (r, alloc) <- allocate (Ident s) args
+        -- popResultVar
+        pure (r, alloc ++ [Store t offset (Ref $ V v)])
 
-expressionVar e = do
-    v <- pushNewResultVar
-    e <- expression e
-    popResultVar
-    pure (v, e)
-
-tupleStructure (Tuple es) = do
-    table <- getTable
-    let sizes = fmap (exprSize table) es
-    let offsets = getOffsets table 0 (NE.toList es)
-    pure (sum sizes, offsets)
-
+-- | Count constructors in a tuple.
+countCons :: NonEmpty AST.Expression -> Table -> Int
+countCons exprs table = foldr (\a b -> countCons' a + b) 0 exprs
     where
-    getOffsets table n [x] = [n]
-    getOffsets table n (x:xs) = n : getOffsets table (n + exprSize table x) xs
+    countCons' (x@(Ident s)) = if isCons x table then 1 else 0
+    countCons' (x@(App left r)) = countCons' left + countCons' r
+    countCons' (x@(Tuple es)) = sum $ fmap countCons' es
+    countCons' _ = 0
 
-    exprSize table e = let eType = exprType table e
-        in case eType of
-            TCons s -> case primitiveType table s of
-                Just a -> a
-                Nothing -> 8   -- Ref
-            TProd _ -> 8
-            TArrow {} -> 8
-            a -> error $ show a
+getAllocMaster = do
+    t <- freshTemp
+    pure $ Left t
+    pure $ Right (t, 2)
+
+storeExpr t (e, name, index, offset) = e ++ [Store (V t) offset (Ref name)]
+
+typeSize typeExpr = case typeExpr of
+    TCons s -> do
+        t <- getProg
+        pure $ maybe QWord varSize (primitiveType t s)
+    TProd _ -> pure QWord    -- Tuples are passed around by reference
+    TArrow _ _ -> pure QWord
 
 tupleStructureType (TProd es) = do
-    table <- getTable
+    table <- getProg
     let sizes = fmap (exprSize table) es
     let offsets = getOffsets table 0 (NE.toList es)
     pure (sum sizes, offsets)
@@ -326,124 +296,47 @@ tupleStructureType (TProd es) = do
         TArrow {} -> 8
         a -> error $ show a
 
-parameter (Param param _, typeExpr) = case typeExpr of
-    TCons s -> do
-        t <- getTable
-        case primitiveType t s of
-            Just size -> freshParam param $ varSize size
-            Nothing -> freshParam param QWord
-    TProd _ -> freshParam param QWord    -- Tuples are passed around by reference
-    TArrow _ _ -> freshParam param QWord
+-- Helpers
 
-pushResultVar var = do
-    (n, l, result, p, s) <- getLocal
-    putLocal (n, l, var:result, p, s)
-
-pushNewResultVar = do
-    (n, l, result, p, s) <- getLocal
-    let newVar = Local n
-    putLocal (n + 1, l, newVar:result, p, s)
-    pure newVar
-
-popResultVar = do
-    (n, l, result, p, s) <- getLocal
-    case result of
-        x:xs -> putLocal (n, l, xs, p, s)
-        _ -> error "Corrupted stack."
-
-freshParam original size = do
-    v <- getAssociatedVar original
-    updateSize v size
-    pure v
-
-updateSize var size = do
-    (n, l, res, p, s) <- getLocal
-    putLocal (n, l, res, p, M.insert var size s)
-
-getSize var = do
-    (n, l, res, p, s) <- getLocal
-    pure $ M.lookup var s
-
--- | Lookup associated IR Var of referenced AST Symbol.
-irVar s = do
-    (_, _, _, p, _) <- getLocal
-    case M.lookup s p of
-        Just a -> pure a
-        Nothing -> error $ "No associated var found for " ++ show s
-
-getAssociatedVar :: Symbol -> IRGen Var
-getAssociatedVar s = do
-    (n, l, res, p, sizes) <- getLocal
-    case M.lookup s p of
-        Nothing -> do
-            let v = Local n
-            putLocal (n + 1, l, res, M.insert s v p, sizes)
-            pure v
-        Just v -> pure v
-
-getVar :: IRGen Var
-getVar = do
-    (n, l, result, p, sizes) <- getLocal
-    case result of
-        x:xs -> pure x
-        [] -> putLocal (n + 1, l, [], p, sizes) >> pure (Local n)
-        -- [] -> error "getVar"
-
-freshLabel :: IRGen Var
-freshLabel = do
-    (n, l, results, p, sizes) <- getLocal
-    putLocal (n, l + 1, results, p, sizes)
-    pure $ Local l
-
-getTable :: IRGen Table
-getTable = snd <$> getProg
+resultVar :: UnitExpression -> IRGen (Name, [Instruction])
+resultVar x = case x of
+        Literal l -> freshTemp >>= \t -> pure (V t, [Assign (V t) (Unit x)])
+        Ref (V v) -> pure (V v, [])
+        Ref (S s) -> pure (S s, [])
+        -- Indexed v 0 -> pure (v, [])
+        -- Indexed v n -> error $ "Indexed not supported." ++ show x
 
 getTypeDetails :: Symbol -> IRGen TypeDetails
 getTypeDetails s = do
-    t <- getTable
+    t <- getProg
     case fromJust $ M.lookup (symId s) t of
-        EntryTCons _ _ _ (Just (_, _, Just det)) -> pure det
+        EntryTCons _ _ _ (Just (_, _, Just details)) -> pure details
         a -> error $ show a
 
-getProg :: IRGen AstState
-getProg = gets fst
+freshLabel = manipulateLocal $ \(v, l, t) -> (l, (v, l + 1, t))
 
-getLocal :: IRGen LocalState
-getLocal = gets snd
+freshTemp = manipulateLocal $ \(v, l, t) -> (Temp t, (v, l, t + 1))
 
-putLocal :: LocalState -> IRGen ()
-putLocal local = do
-    (p, _) <- get
-    put (p, local)
+endBlock = manipulateLocal $ \(v, l, _) -> ((), (v, l, 0))
 
-type SymbMap = Map Symbol Var
-type LocalTempNo = ID
-type LocalResults = [Var]
-type LocalLabelNo = ID
-type LocalState = (LocalTempNo, LocalLabelNo, LocalResults, SymbMap, VarSizes)
-type AstState = (Program, Table)
-type GenState = (AstState, LocalState)
+endProc = manipulateLocal $ \(v, _, _) -> ((), (v, 0, 0))
 
-initState :: AstState -> GenState
-initState (Program elements, t) = ((Program (filter arrow elements), t), initLocal)
+manipulateLocal f = do
+    l <- getLocal
+    let (r, newLocal) = f l
+    putLocal newLocal
+    pure r
+
+type LabelNo = Int
+type TempNo = Int
+type GenState = (VarSizes, LabelNo, TempNo)
+type AstState = Table
+
+initState :: AstState -> SimplifierState AstState GenState
+initState t = initializeState initLocal t
     where
-    arrow p@Proc {} = True
-    arrow f@Func {} = True
-    arrow _ = False
-
-initLocal :: LocalState
-initLocal = (0, 0, [], M.empty, M.empty)
-
-type IRGen a = State GenState a
-
-type Error = String
-
-storeExpr t (e, v, index, offset) = e ++ [Store t offset (LocalVar v)]
-
-stdInt = TCons . intId <$> getTable
-stdUnit = TCons . unitId <$> getTable
-stdBool = TCons . boolId <$> getTable
-stdString = TCons . stringId <$> getTable
+    initLocal :: GenState
+    initLocal = (M.empty, 0, 0)
 
 isArrow (AST.Ident s) table = case fromJust $ M.lookup (symId s) table of
     EntryProc {} -> True

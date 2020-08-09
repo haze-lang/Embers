@@ -342,7 +342,7 @@ type ParamId = ID
 type TypeID = ID
 type MaxSize = Int
 type TagSize = IR.Size
-type Ctor = Map Int Int     -- Array of offsets of constructor's fields; (0, x) = x is offset of first field, (1, y) = y is offset of second field
+type Ctor = Map Int Int     -- Array of offsets of constructor's fields; (0, x) => x is offset of first field, (1, y) => y is offset of second field
 type TypeDetails = (TagSize, MaxSize, [Ctor])
 
 getRelative = NE.head

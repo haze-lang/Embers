@@ -21,6 +21,7 @@ module Frontend.Error.TypeError where
 
 import Frontend.AbstractSyntaxTree
 import Data.List.NonEmpty
+import qualified CompilerUtilities.IntermediateProgram as IR
 
 data TypeError
     = UnificationFail TypeExpression TypeExpression
@@ -45,7 +46,7 @@ instance Show TypeError where
             NonArrowApplication e t -> show e ++ " is used in application but has non-arrow type " ++ show t
             MismatchingCaseTypes l r -> "Case expressions have mismatching types. " ++ show l ++ ", " ++ show r
             TuplePatternNonProdType t -> "Tuple pattern found on non-product type. " ++ show t
-            TupleElementMismatch es r -> "Cannot bind tuple elements (" ++ printNE es ", " ++ ") to type " ++ show r
+            TupleElementMismatch es r -> "Cannot bind tuple elements (" ++ IR.printNE es ", " ++ ") to type " ++ show r
             SwitchPatternMismatch l r -> "Switch expression has different type than pattern: " ++ show l ++ ", " ++ show r
             MismatchingDefault expected actual -> "Default case has mismatching type. " ++ unexpected expected actual
             MismatchingBranches l r -> "Branches of a conditional expression must have same type. " ++ show l ++ ", " ++ show r

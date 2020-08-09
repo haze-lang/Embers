@@ -46,4 +46,4 @@ decCol (Meta c l f) = Meta (c - 1) l f
 incLine (Meta c l f) = Meta 1 (l + 1) f
 
 data StrSource = Str String Metadata
-    deriving Show
+    deriving (Show, Eq)

@@ -262,9 +262,6 @@ item = P $ \inp -> case inp of
 
 -- Helpers
 
-instance Eq StrSource where
-    (==) (Str x m1) (Str y m2) = x == y && m1 == m2
-
 sat :: (Char -> Bool) -> Lexer Char
 sat p = do
     x <- item

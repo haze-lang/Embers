@@ -26,60 +26,64 @@ module CompilerUtilities.IntermediateProgram
     BinOp (..),
     Var (..),
     Size (..),
+    Name (..),
     IRState,
     VarSizes,
-    varSize
+    Label,
+    varSize,
+    printList,
+    printNE
 )
 where
 
 import Data.List.NonEmpty
 import Data.Map.Strict (Map)
 import Data.List.Utils
--- import CompilerUtilities.ProgramTable
+import CompilerUtilities.SourcePrinter
+import Frontend.AbstractSyntaxTree (Symbol, Parameter, Literal(..))
 import qualified Frontend.AbstractSyntaxTree as AST
-import Frontend.LexicalAnalysis.Token (Literal(..))
-import qualified Frontend.LexicalAnalysis.Token as T
 
-data Routine = Routine AST.Symbol [Var] [Var] [Instruction]
+data Routine = Routine Symbol [Parameter] [Symbol] [Instruction]
 
 data Instruction
-    = ConditionalJump UnitExpression BinOp UnitExpression Var
-    | Jump Var
-    | Mark Var
-    | Invoke Var [UnitExpression] Var            -- Var : The variable in which the return value will be stored.
+    = ConditionalJump UnitExpression BinOp UnitExpression Name
+    | Jump Name
+    | Mark Label
+    | Invoke Name [UnitExpression] Var                  -- Var : The variable in which the return value will be stored.
     | Return UnitExpression                             -- Values to be placed in "OUT" parameters.
-    | Assign Var Expression
-    | Alloc Var Int
-    | Load Var UnitExpression Index                     -- Var = *(UnitExpression + Index)
-    | Store Var Index UnitExpression                    -- *(Var + Index) = UnitExpression
+    | Assign Name Expression
+    | Alloc Name Int
+    | Load Name UnitExpression Index                     -- Var = [UnitExpression + Index]
+    | Store Name Index UnitExpression                    -- [Var + Index] = UnitExpression
     | Comment String
+    | EndBlock
 
 data Expression
     = Unit UnitExpression
     | Bin UnitExpression BinOp UnitExpression
-    -- | Unary UnaryExpression
-
--- data UnaryExpression = Ue UnOp UnitExpression
 
 data UnitExpression
-    = Literal T.Literal
-    -- | AstSymb AST.Symbol
-    | LocalVar Var
+    = Literal AST.Literal
+    | Ref Name
+    -- | Indexed Name Int                                  -- [name + int]
+
+data Name = S Symbol | V Var | L Label
+    deriving (Eq,Ord)
 
 data BinOp = Add | Sub | Mul | Div | Mod | Greater | Equals | Less
 
--- data UnOp = Deref | AddressOf
-    -- deriving Show
+newtype Var = Temp Int
+    deriving (Eq, Ord)
 
-data Var
-    = Local Int
-    | AstSymb AST.Symbol
+type Label = Int
+-- newtype Label = Label Int
+    -- deriving (Eq, Ord)
 
 data Size = Byte | Word | DWord | QWord
     deriving (Show, Eq)
 
 type IRState = ([Routine], VarSizes)
-type VarSizes = Map Var Size
+type VarSizes = Map Name Size
 
 type Index = Int
 
@@ -90,11 +94,11 @@ varSize size
     | otherwise = QWord
 
 instance Show Routine where
-    show (Routine s params locals ins) = "PROC " ++ AST.symStr s ++ " " ++ AST.printList params " " ++ "\nUSES " ++ AST.printList locals " " ++ "\n" ++ AST.printList ins "\n"
+    show (Routine s params locals ins) = "PROC " ++ AST.symStr s ++ " " ++ printSourceList params " " ++ "\nUSES " ++ printSourceList locals " " ++ "\n" ++ printList ins "\n"
 
 instance Show Instruction where
     show mnemonic = "\t" ++ case mnemonic of
-        Mark l -> "\n_" ++ show l ++ ":"
+        Mark l -> "\n.L" ++ show l ++ ":"
         ConditionalJump l op r v -> "if " ++ show l ++ " " ++ show op ++ " " ++ show r ++ " jmp " ++ show v
         Jump v -> "jmp " ++ show v
         Assign v e -> show v ++ " = " ++ show e
@@ -106,21 +110,19 @@ instance Show Instruction where
         Invoke callee e var -> show var ++ " = invoke " ++ show callee ++ " " ++ show e
         Return e -> "return " ++ show e
         Comment c -> "\n\t; " ++ replace "\n\t" "\n\t;\t" c
+        EndBlock -> ""
 
 instance Show Expression where
     show e = case e of
         Unit ue -> show ue
-        -- Unary ue -> show ue
         Bin l op r -> show l ++ " " ++ show op ++ " " ++ show r
-
--- instance Show UnaryExpression where
-    -- show (Ue op e) = show op ++ " " ++ show e
 
 instance Show UnitExpression where
     show ue = case ue of
-        Literal l -> show l
-        -- AstSymb s -> show s
-        LocalVar v -> show v
+        Literal l -> printSource l
+        Ref op -> show op
+        -- Indexed n 0 -> "["++show n++"]"
+        -- Indexed n index -> show index ++ "["++show n ++ "]"
 
 instance Show BinOp where
     show op = case op of
@@ -134,11 +136,21 @@ instance Show BinOp where
         Less -> "<"
 
 instance Show Var where
-    show (Local n) = "t" ++ show n
-    show (AstSymb s) = AST.symStr s
+    show (Temp n) = "t" ++ show n
 
-instance Eq Var where
-    Local a == Local b = a == b
+-- instance Show Label where
+    -- show (Label id) = ".L" ++ show id
 
-instance Ord Var where
-    Local a `compare` Local b = a `compare` b
+instance Show Name where
+    show (S s) = AST.symStr s
+    show (V v) = show v
+    show (L id) = ".L" ++ show id
+
+printList [] _ = ""
+printList [x] _ = show x
+printList (x:xs) c = show x ++ f xs
+    where f = foldr (\a b -> c ++ show a ++ b) ""
+
+printNE (x:|[]) _ = show x
+printNE (x:|xs) c = show x ++ f xs
+    where f = foldr (\a b -> c ++ show a ++ b) ""

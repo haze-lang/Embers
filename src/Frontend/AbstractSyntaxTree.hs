@@ -29,14 +29,14 @@ data ProgramElement
     | Proc [BoundParameter] TypeExpression Symbol (NonEmpty Statement)
     | Func [BoundParameter] TypeExpression Symbol Expression
     | ExpressionVar TypeExpression Symbol Expression
-    deriving (Eq)
+    deriving (Show, Eq)
 
 type BoundParameter = (Parameter, TypeExpression)
 
 data Statement
     = StmtExpr Expression
     | Assignment Symbol Expression
-    deriving (Eq)
+    deriving (Show, Eq)
 
 data Type
     = Record Symbol ValueCons (NonEmpty RecordMember)          -- Members' types must be a type name, not a type expression.
@@ -50,7 +50,7 @@ data ValueCons = ValCons Symbol [BoundParameter]
     deriving (Show,Eq)
 
 data Parameter = Param Symbol CallMode
-    deriving (Eq)
+    deriving (Show, Eq)
 
 data CallMode = ByVal | ByRef
     deriving (Show, Eq)
@@ -64,7 +64,7 @@ data TypeExpression
     | TCons Symbol
     | TVar Symbol
     | TApp Symbol [Symbol]
-    deriving Eq
+    deriving (Show, Eq)
 
 data Expression
     = Access Expression AccessMode         -- Acess elements of a tuple/product type.
@@ -75,31 +75,33 @@ data Expression
     | Tuple (NonEmpty Expression)
     | Ident Symbol
     | Lit Literal
-    deriving Eq
+    deriving (Show, Eq)
 
 data AccessMode
     = Tag
     | Member Int
     | ConsMember Int Int -- ConsIndex ValIndex
-    deriving Eq
+    deriving (Show, Eq)
 
 data Literal
     = NUMBER Int
     | CHAR Char
-    deriving Eq
+    deriving (Show, Eq)
 
 data Identifier
     = IDENTIFIER String
     | ResolvedName Int (NonEmpty String)
+    deriving Show
 
 data Metadata = Meta Column Line Filename
-    deriving Eq
+    deriving (Show, Eq)
 
 type Column = Int
 type Line = Int
 type Filename = String
 
 data Symbol = Symb Identifier Metadata
+    deriving Show
 
 data LambdaExpression
     = ProcLambda Symbol (NonEmpty Parameter) (NonEmpty Statement)
@@ -140,88 +142,3 @@ instance Ord Symbol where
 
 instance Ord Parameter where
     s1 `compare` s2 = paramId s1 `compare` paramId s2
-
-instance Show Symbol where
-    show (Symb id m) = show id ++ " at " ++ show m
-
-instance Show TypeExpression where
-    show (TVar v) = show v
-    show (TArrow l r) = f l ++ " -> " ++ f r
-        where f x = case x of
-                TCons _ -> show x
-                TVar _ -> show x
-                _ -> "( " ++ show x ++ " )"
-    show (TProd (x:|[])) = show x
-    show (TProd (x:|xs)) =  "(" ++ show x ++ f xs ++ ")"
-        where f = foldr (\a b -> " X " ++ show a ++ b) ""
-    show (TCons s) = symStr s
-    show (TApp s [ss]) = "TApp " ++ show s ++ " " ++ show ss
-
-instance Show ProgramElement where
-    show (Ty t) = show t ++ "\n"
-    show (Proc bParams retType name body) =
-        let params = fmap fst bParams
-            argTypes = fmap snd bParams
-            procType = (TProd (fromList argTypes) `TArrow` retType)
-        in
-        symStr name ++ " : " ++ show procType ++ "\n"
-        ++ symStr name ++ " " ++ printList params " " ++ "\n"
-        ++ "{\n" ++ printNE body "\n" ++ "\n}\n"
-    
-    show (Func bParams retType name body) =
-        let params = fmap fst bParams
-            argTypes = fmap snd bParams
-            funcType = (TProd (fromList argTypes) `TArrow` retType)
-        in
-        symStr name ++ " : " ++ show funcType ++ "\n"
-        ++ symStr name ++ " " ++ printList params " " ++ " = "
-        ++ show body ++ "\n"
-
-instance Show Statement where
-    show (Assignment l r) = symStr l ++ " = " ++ show r
-    show (StmtExpr e) = show e
-
-instance Show Expression where
-    show (Access e Tag) = "Tag(" ++ show e ++ ")"
-    show (Access e (Member n)) = show e ++ "[" ++ show n ++ "]"
-    show (Access e (ConsMember c n)) = show e ++ "." ++ show c ++"[" ++ show n ++ "]"
-    show (App l r) = show l ++ " " ++ show r
-    show (Switch e cases def) = "switch " ++ show e ++ "\n" ++ concatMap _case (toList cases) ++ "\tdefault -> " ++ show def
-        where
-        _case (p, e) = "\t" ++ show p ++ " -> " ++ show e ++ "\n"
-    show (Conditional c e1 e2) = "if " ++ show c ++ " then " ++ show e1 ++ " else " ++ show e2
-    show (Lambda l) = lambda l
-        where
-        lambda (ProcLambda name params body) = printNE params " " ++
-            " => \n\t{\n\t\t" ++ printNE body "\n\t\t" ++ "\n\t}\n"
-        lambda (FuncLambda name params e) = printNE params " " ++ " => " ++ show e ++ "\n"
-
-    show (Tuple (x:|[])) = show x
-    show (Tuple (x:|xs)) =  "(" ++ show x ++ f xs ++ ")"
-        where f = foldr (\a b -> ", " ++ show a ++ b) ""
-    show (Ident s) = symStr s
-    show (Lit l) = show l
-
-instance Show Parameter where
-    show (Param s _) = symStr s
-
-instance Show Identifier where
-    show (IDENTIFIER s) = s ++ "<>"
-    show (ResolvedName id (s:|_)) = s ++ "<" ++ show id ++ ">"
-
-instance Show Metadata where
-    show (Meta c l []) = show l ++ ":" ++ show c
-    show (Meta c l f) = show f ++ ":" ++ show l ++ ":" ++ show c
-
-instance Show Literal where
-    show (NUMBER n) = show n
-    show (CHAR c) = show c
-
-printList [] _ = ""
-printList [x] _ = show x
-printList (x:xs) c = show x ++ f xs
-    where f = foldr (\a b -> c ++ show a ++ b) ""
-
-printNE (x:|[]) _ = show x
-printNE (x:|xs) c = show x ++ f xs
-    where f = foldr (\a b -> c ++ show a ++ b) ""
