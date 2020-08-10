@@ -22,6 +22,7 @@ module Frontend.Error.TypeError where
 import Frontend.AbstractSyntaxTree
 import Data.List.NonEmpty
 import qualified CompilerUtilities.IntermediateProgram as IR
+import CompilerUtilities.SourcePrinter
 
 data TypeError
     = UnificationFail TypeExpression TypeExpression
@@ -42,16 +43,16 @@ instance Show TypeError where
         where
         msg = case e of
             UnificationFail l r -> "Failed to unify. " ++ unexpected l r
-            ArgumentMismatch l r -> "Expected type " ++ show l ++ " but argument supplied has type " ++ show r
-            NonArrowApplication e t -> show e ++ " is used in application but has non-arrow type " ++ show t
-            MismatchingCaseTypes l r -> "Case expressions have mismatching types. " ++ show l ++ ", " ++ show r
-            TuplePatternNonProdType t -> "Tuple pattern found on non-product type. " ++ show t
-            TupleElementMismatch es r -> "Cannot bind tuple elements (" ++ IR.printNE es ", " ++ ") to type " ++ show r
-            SwitchPatternMismatch l r -> "Switch expression has different type than pattern: " ++ show l ++ ", " ++ show r
+            ArgumentMismatch l r -> "Expected type " ++ printSource l ++ " but argument supplied has type " ++ printSource r
+            NonArrowApplication e t -> printSource e ++ " is used in application but has non-arrow type " ++ printSource t
+            MismatchingCaseTypes l r -> "Case expressions have mismatching types. " ++ printSource l ++ ", " ++ printSource r
+            TuplePatternNonProdType t -> "Tuple pattern found on non-product type. " ++ printSource t
+            TupleElementMismatch es r -> "Cannot bind tuple elements (" ++ printSourceNE es ", " ++ ") to type " ++ printSource r
+            SwitchPatternMismatch l r -> "Switch expression has different type than pattern: " ++ printSource l ++ ", " ++ printSource r
             MismatchingDefault expected actual -> "Default case has mismatching type. " ++ unexpected expected actual
-            MismatchingBranches l r -> "Branches of a conditional expression must have same type. " ++ show l ++ ", " ++ show r
-            ConditionalNonBool e t -> "Expected Bool, but " ++ show e ++ " has type " ++ show t
-            NonUnitAssignment t -> "Last statement is assignment so return type is expected to be Unit, but signature has type " ++ show t
-            ReturnTypeMismatch l r -> "Return type in signature is " ++ show l ++ ", but return statement has type " ++ show r
+            MismatchingBranches l r -> "Branches of a conditional expression must have same type. " ++ printSource l ++ ", " ++ printSource r
+            ConditionalNonBool e t -> "Expected Bool, but " ++ printSource e ++ " has type " ++ printSource t
+            NonUnitAssignment t -> "Last statement is assignment so return type is expected to be Unit, but signature has type " ++ printSource t
+            ReturnTypeMismatch l r -> "Return type in signature is " ++ printSource l ++ ", but return statement has type " ++ printSource r
 
-        unexpected expected actual = "Expected " ++ show expected ++ ", found " ++ show actual
+        unexpected expected actual = "Expected " ++ printSource expected ++ ", found " ++ printSource actual

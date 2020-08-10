@@ -365,7 +365,7 @@ showArrDef (Just (params, retId)) = "Parameters: " ++ show params ++ "\tReturn T
 showTypeDef Nothing = "Aliasing Constructor & Type: Undefined"
 showTypeDef (Just (sameName, tDef, details)) = "Aliasing Constructor: " ++ show sameName ++ "\tType: " ++ show tDef ++ showStruct details
 
-showStruct (Just (_, maxSize, ctors)) = "\tSize: " ++ show maxSize ++ "\tCtors: " ++ show ctors
+showStruct (Just (_, maxSize, ctors)) = "\tMaxSize: " ++ show maxSize ++ "\tCtors: " ++ show ctors
 showStruct Nothing = "Structure N/A"
 
 showRetType Nothing = "Type: Undefined"

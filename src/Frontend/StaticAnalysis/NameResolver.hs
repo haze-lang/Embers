@@ -116,7 +116,7 @@ _type (Record typeName cons members) = do
     t <- getTable
     let size = consSize t cons
     let consMaps = getConsMaps t 0 [cons]
-    let details = (IR.Byte, size, consMaps)
+    let details = (IR.Byte, size, consMaps) -- Tag size is not supported for records and is not part of (max) size, hence it won't be allocated.
     defineRecordTypeEntry typeName sameCons consId memberIds details
     pure $ Ty $ Record typeName cons (fromList members)
 

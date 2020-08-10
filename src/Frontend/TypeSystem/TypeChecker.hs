@@ -36,6 +36,7 @@ import qualified Data.Map.Strict as M
 import CompilerUtilities.ProgramTable
 import Frontend.TypeSystem.Inference.ConstraintGenerator
 import Frontend.TypeSystem.Inference.Unifier
+import CompilerUtilities.SourcePrinter
 
 type TypeChecker a = ExceptT TypeError (State TypeCheckerState) a
 
@@ -95,7 +96,7 @@ statementType (Assignment var r) = do
         Nothing -> defineVarType var t
         Just someType -> do
             a <- assertStructural someType t
-            unless a $ error $ show var ++ " has type " ++ show someType ++ " but a value of " ++ show t ++ " is assigned."
+            unless a $ error $ printSource var ++ " has type " ++ printSource someType ++ " but a value of " ++ printSource t ++ " is assigned."
     pure Nothing  -- Assignment statement has no type.
 
 statementType (StmtExpr e) = Just <$> expressionType e
@@ -157,10 +158,8 @@ expressionType (Switch e cases def) = do
             where
             assignProd es eType = case eType of
                 TProd tExpr -> if NE.length tExpr == NE.length es
-                    then mapM_ defineIdentType (NE.zip es tExpr)
-                    else throwError $ TupleElementMismatch es exprType
-                    -- else error $ "Cannot bind tuple elements " ++ show es ++ " to type " ++ show exprType
-                -- _ -> error "Tuple pattern found on non-product type."
+                                then mapM_ defineIdentType (NE.zip es tExpr)
+                                else throwError $ TupleElementMismatch es exprType
                 t -> throwError $ TuplePatternNonProdType t
 
                 where defineIdentType (Ident s, t) = defineVarType s t
@@ -175,10 +174,10 @@ expressionType (App l r) = do
     let (TArrow paramType retType) = tl
     tr <- expressionType r
     if isPolymorphic tl
-    then polymorphicApp l r tl tr
-    else do
-        assertWithError (ArgumentMismatch paramType tr) tr paramType
-        pure retType
+        then polymorphicApp l r tl tr
+        else do
+            assertWithError (ArgumentMismatch paramType tr) tr paramType
+            pure retType
 
     where
     isArrow TArrow {} = True
@@ -256,6 +255,7 @@ assertStructural (TArrow l1 r1) (TArrow l2 r2) = do
 
 assertStructural (TProd (x:|[])) (TProd (y:|[])) = assertStructural x y
 assertStructural (TProd (_:|_)) (TProd (_:|[])) = pure False
+assertStructural (TProd (_:|[])) (TProd (_:|_)) = pure False
 assertStructural (TProd (x:|xs)) (TProd (y:|ys)) = do
     r1 <- assertStructural x y
     r2 <- assertStructural (TProd $ fromList xs) (TProd $ fromList ys)
@@ -278,7 +278,9 @@ defineVarType (Symb (ResolvedName id absName) m) varType = do
     t <- getTable
     case lookupTableEntry id t of
         Just (EntryVar name absName scope Nothing) -> updateEntry id $ EntryVar name absName scope (Just varType)
-        Just (EntryVar name absName scope (Just t)) -> if varType == t then pure () else error "Type conflict found."
+        Just (EntryVar name absName scope (Just t)) -> if varType == t
+                                                        then pure ()
+                                                        else error "Type conflict found."
 --      Nested switch expressions call this ^ on variables with defined types. TODO: Investigate.
 
 updateEntry :: ID -> TableEntry -> TypeChecker ()
