@@ -117,29 +117,30 @@ expression e = case e of
 
         pure (Ref $ V temp, block)
 
+    Cons cons [] -> allocate cons Nothing
+
+    Cons cons args -> allocate cons (Just $ Tuple $ NE.fromList args)
+
     App left right -> do
         table <- getProg
-        if isCons left table
-        then allocate left (Just right)
-        else do
-            (callee, loadIns) <- case left of
-                Ident s -> pure (S s, [])
-                _ -> do
-                    (r, e) <- expression left
-                    case r of Ref name -> pure (name, e)
+        (callee, loadIns) <- case left of
+            Ident s -> pure (S s, [])
+            _ -> do
+                (r, e) <- expression left
+                case r of Ref name -> pure (name, e)
 
-            case right of
-                Tuple args -> do
-                    t <- freshTemp
-                    (results, exprs) <- NE.unzip <$> mapM expression args
-                    let argExprs = concat (NE.toList exprs)
-                    -- let args = map LocalVar (NE.toList results)
-                    pure (Ref $ V t, loadIns ++ argExprs ++ [Invoke callee (NE.toList results) t])
+        case right of
+            Tuple args -> do
+                t <- freshTemp
+                (results, exprs) <- NE.unzip <$> mapM expression args
+                let argExprs = concat (NE.toList exprs)
+                -- let args = map LocalVar (NE.toList results)
+                pure (Ref $ V t, loadIns ++ argExprs ++ [Invoke callee (NE.toList results) t])
 
-                _ -> do
-                    (v, e) <- expression right
-                    t <- freshTemp
-                    pure (Ref $ V t, e ++ [Invoke callee [v] t])
+            _ -> do
+                (v, e) <- expression right
+                t <- freshTemp
+                pure (Ref $ V t, e ++ [Invoke callee [v] t])
 
     Access expr Tag -> do
         (r, e) <- expression expr
@@ -173,9 +174,7 @@ expression e = case e of
 
     Ident s -> do
         t <- getProg
-        if isCons e t
-        then allocate e Nothing
-        else if isArrow e t
+        if isArrow e t
             then do
                 -- t <- getAssociatedVar s         -- TODO: AST Symbol
                 -- r <- freshTemp
@@ -191,35 +190,31 @@ expression e = case e of
 
     _ -> pure (Ref $ V $ Temp (-1), [])
 
-allocate (Ident s) Nothing = do
+allocate s Nothing = do
     -- error "a"
     table <- getProg
     let (TCons retType) = fromJust $ lookupType (symId s) table
     (tagSize, size, ctors) <- getTypeDetails retType
     let (EntryValCons _ _ _ (Just (index, _, _))) = fromJust $ M.lookup (symId s) table
-    -- let t = Temp 200
-    -- t <- freshTemp
-    -- updateSize t QWord
     case primitiveType table retType of
-        Just _ -> do
-            -- updateSize t tagSize
-            -- pure [Assign (V t) $ Unit $ Literal (NUMBER index)]
-            pure (Literal (NUMBER index), [])
+        Just _ -> pure (Literal (NUMBER index), [])
         -- Nothing -> pure [Alloc t size, Store t 0 (Literal $ NUMBER index)]
         Nothing -> do
+            -- t <- freshTemp
+            -- updateSize t QWord
             x <- getAllocMaster
             case x of
                 Left t -> pure (Ref $ V t, [Alloc (V t) size, Store (V t) index (Literal $ NUMBER index)])
-                Right (t, index) -> pure (Ref $ V t, [Alloc (V t) size, Store (V t) index (Literal $ NUMBER index)])
+                Right (t, index') -> pure (Ref $ V t, [Alloc (V t) size, Store (V t) index' (Literal $ NUMBER index)])
 
-allocate (Ident cons) (Just right) = do
+allocate cons (Just right) = do
     table <- getProg
     let (pType `TArrow` (TCons retType)) = fromJust $ lookupType (symId cons) table
     (tagSize, size, ctors) <- getTypeDetails retType
     let (EntryValCons _ _ _ (Just (index, _, _))) = fromJust $ M.lookup (symId cons) table
     t <- freshTemp
     -- updateSize t QWord
-    (r, alloc, bulk) <- case right of
+    (r, alloc) <- case right of
         -- Ident s -> f (V t) s ctors index Nothing
 
         -- App (Ident s) right' -> f (V t) s ctors index (Just right')
@@ -227,23 +222,23 @@ allocate (Ident cons) (Just right) = do
         Tuple es -> do
             (vars', exprs) <- NE.unzip <$> mapM expression es
             vars'' <- mapM resultVar vars'
-            let consCount = countCons es table
+            -- error $ show consCount
             let (vars, es) = NE.unzip vars''
             let ctor = ctors !! index
             let offsets = map (\index -> fromJust $ M.lookup index ctor) [0..]
             let fla = concat es
             let exprVarIndex = zip4 (NE.toList exprs) (NE.toList vars) [0..] offsets
             xx <- pure $ concatMap (storeExpr t) exprVarIndex
-            pure (Ref $ V $ Temp (-100), fla++xx, consCount + 1)
+            pure (Ref $ V $ Temp (-100), fla++xx)
 
         _ -> do
             let ctor = ctors !! index
             let offset = fromJust $ M.lookup 0 ctor
             (v, x) <- expression right
             xx <- pure $ x ++ [Store (V t) offset v]
-            pure (Ref $ V $ Temp (-100), xx, 1)
+            pure (Ref $ V $ Temp (-100), xx)
 
-    pure $ (Ref $ V t, [Alloc (V t) (size*bulk), Store (V t) 0 (Literal $ NUMBER index)] ++ alloc)
+    pure $ (Ref $ V t, [Alloc (V t) (size), Store (V t) 0 (Literal $ NUMBER index)] ++ alloc)
 
     where
     f t s ctors index args = do
@@ -251,18 +246,9 @@ allocate (Ident cons) (Just right) = do
         let offset = fromJust $ M.lookup 0 ctor
         v <- freshTemp
         -- v <- pushNewResultVar
-        (r, alloc) <- allocate (Ident s) args
+        (r, alloc) <- allocate s args
         -- popResultVar
         pure (r, alloc ++ [Store t offset (Ref $ V v)])
-
--- | Count constructors in a tuple.
-countCons :: NonEmpty AST.Expression -> Table -> Int
-countCons exprs table = foldr (\a b -> countCons' a + b) 0 exprs
-    where
-    countCons' (x@(Ident s)) = if isCons x table then 1 else 0
-    countCons' (x@(App left r)) = countCons' left + countCons' r
-    countCons' (x@(Tuple es)) = sum $ fmap countCons' es
-    countCons' _ = 0
 
 getAllocMaster = do
     t <- freshTemp
@@ -343,8 +329,3 @@ isArrow (AST.Ident s) table = case fromJust $ M.lookup (symId s) table of
     EntryFunc {} -> True
     EntryLambda {} -> True
     _ -> False
-
-isCons (AST.Ident s) table = case fromJust $ M.lookup (symId s) table of
-        EntryValCons {} -> True
-        _ -> False
-isCons _        _ =  False

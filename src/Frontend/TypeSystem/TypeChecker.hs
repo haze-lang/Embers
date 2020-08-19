@@ -148,12 +148,13 @@ expressionType (Switch e cases def) = do
             Lit _ -> pure ()
             Ident _ -> pure ()      -- Single identifier is a nullary value constructor.
             Tuple es -> assignProd es exprType
-            App cons args -> do
-                consType <- expressionType cons
+            Cons cons arg -> do
+                consType <- expressionType (Ident cons)
                 let (argType `TArrow` _) = consType
-                case args of
-                    Ident s -> defineVarType s argType
-                    Tuple es -> assignProd es argType
+                case arg of
+                    [] -> pure ()
+                    [Ident s] -> defineVarType s argType
+                    args -> assignProd (NE.fromList args) argType
 
             where
             assignProd es eType = case eType of
@@ -167,6 +168,10 @@ expressionType (Switch e cases def) = do
     _case targetType caseExpr = do
         caseType <- expressionType caseExpr
         assertWithError (MismatchingCaseTypes targetType caseType) targetType caseType
+
+expressionType (Cons cons []) = expressionType (Ident cons)
+expressionType (Cons cons [arg]) = expressionType (App (Ident cons) arg)
+expressionType (Cons cons args) = expressionType (App (Ident cons) (Tuple (NE.fromList args)))
 
 expressionType (App l r) = do
     tl <- expressionType l

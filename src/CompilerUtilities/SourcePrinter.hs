@@ -10,9 +10,6 @@ import Frontend.AbstractSyntaxTree
 class SourcePrinter a where
     printSource :: a -> String
 
-instance SourcePrinter Symbol where
-    printSource (Symb id m) = printSource id ++ " at " ++ printSource m
-
 instance SourcePrinter TypeExpression where
     printSource (TVar v) = printSource v
     printSource (TArrow l r) = f l ++ " -> " ++ f r
@@ -58,6 +55,8 @@ instance SourcePrinter Expression where
     printSource (Access e (Member n)) = printSource e ++ "[" ++ show n ++ "]"
     printSource (Access e (ConsMember c n)) = printSource e ++ "." ++ show c ++"[" ++ show n ++ "]"
     printSource (App l r) = printSource l ++ " " ++ printSource r
+    printSource (Cons cons []) = symStr cons
+    printSource (Cons cons args) = symStr cons ++ " " ++ printSourceList args ", "
     printSource (Switch e cases def) = "switch " ++ printSource e ++ "\n" ++ concatMap _case (toList cases) ++ "\tdefault -> " ++ printSource def
         where
         _case (p, e) = "\t" ++ printSource p ++ " -> " ++ printSource e ++ "\n"
@@ -73,6 +72,9 @@ instance SourcePrinter Expression where
         where f = foldr (\a b -> ", " ++ printSource a ++ b) ""
     printSource (Ident s) = symStr s
     printSource (Lit l) = printSource l
+
+instance SourcePrinter Symbol where
+    printSource (Symb id m) = printSource id ++ " at " ++ printSource m
 
 instance SourcePrinter Parameter where
     printSource (Param s _) = symStr s

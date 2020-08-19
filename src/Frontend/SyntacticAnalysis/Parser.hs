@@ -281,6 +281,11 @@ recordType = do
 expression :: Parser Expression
 expression = application <|> infixApp <|> expr
 
+application :: Parser Expression
+application = do
+    func <- expr
+    App func <$> expr
+
 infixApp = do
     e <- expr
     r <- many (do
@@ -304,11 +309,6 @@ expr = switchExpr
     <|> identifier
     <|> literal
     <|> groupedExpression
-
-application :: Parser Expression
-application = do
-    func <- expr
-    App func <$> expr
 
 groupedExpression :: Parser Expression
 groupedExpression = do

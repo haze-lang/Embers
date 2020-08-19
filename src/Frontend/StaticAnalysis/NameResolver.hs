@@ -148,7 +148,12 @@ statement (StmtExpr e) = StmtExpr <$> expression e
 
 expression :: Expression -> NameResolver Expression
 expression (Lit lit) = pure $ Lit lit
-expression (Ident id) = Ident <$> resolveName id
+expression (Ident s) = do
+    resolved <- resolveName s
+    t <- getTable
+    if isCons (Ident resolved) t
+        then pure $ Cons resolved []
+        else pure $ Ident resolved
 
 expression (Tuple (e:|es)) = do
     e <- expression e
@@ -199,10 +204,27 @@ expression (Lambda (FuncLambda name params body)) = do
     endScopeLambda name (toList params) -- Lambdas will be defined (in table entry) after type inference.
     pure $ Lambda $ FuncLambda name params body
 
+expression (App (Ident l) arg) = do
+    l <- resolveName l
+    arg <- expression arg
+    t <- getTable
+    if isCons (Ident l) t
+        then do
+            case arg of
+                Tuple es -> pure $ Cons l (NE.toList es)
+                _ -> pure $ Cons l [arg]
+        else pure $ App (Ident l) arg
+
 expression (App l arg) = do
     l <- expression l
     arg <- expression arg
     pure $ App l arg
+
+isCons :: Expression -> Table -> Bool
+isCons (Ident s) t = case lookupTableEntry (symId s) t of
+    Just (EntryValCons {}) -> True
+    _ -> False
+isCons _ _ = False
 
 -- | Ensure that all variables referenced inside pure lambda expressions are defined inside the lambda.
 checkLocals e lambdaId = case e of
@@ -305,8 +327,8 @@ resolve (Symb (IDENTIFIER name) m) isType = do
             if isDefined (id, entry) scopeTrace symbolStack
             then
                 if isType
-                then pure $ Just $ Symb (ResolvedName id (makeAbs name scopeTrace)) m
-                else checkType entry id name scopeTrace
+                    then pure $ Just $ Symb (ResolvedName id (makeAbs name scopeTrace)) m
+                    else checkType entry id name scopeTrace
             else error $ "Use before definition: " ++ name ++ " " ++ show (head symbolStack) ++ " " ++ show (M.lookup id (head symbolStack)) ++ " " ++ show m
 
         findInParentScope = maybe (pure Nothing) (\absName -> resolve' name absName originalTrace table symbolStack) (dequalifyName scopeTrace)

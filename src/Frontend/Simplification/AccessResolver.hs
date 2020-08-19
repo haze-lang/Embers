@@ -42,13 +42,13 @@ statement s = case s of
 expression original@(Switch e cases def) = do
     let firstPattern = fst $ NE.head cases
     case firstPattern of
+        Cons {} -> sumTypeCons
+
         Tuple es -> do
             markSequence e es
             let firstCase = snd $ NE.head cases
             expression firstCase
 
-        App {} -> sumTypeCons
-        Ident _ -> sumTypeCons
         _ -> pure original
 
     where
@@ -56,19 +56,19 @@ expression original@(Switch e cases def) = do
         cases <- mapM _case cases
         pure $ Switch (Access e Tag) cases def
 
-    _case (Ident a, expr) = do
+    _case (Cons cons [], expr) = do
         expr <- expression expr
-        pure (Ident a, expr)
+        pure (Cons cons [], expr)
 
-    _case (App (Ident cons) (Ident member), expr) = do
+    _case (Cons cons [Ident member], expr) = do
         markCons cons e member 0
         expr <- expression expr
-        pure (Ident cons, expr)
+        pure (Cons cons [], expr)
 
-    _case (App (Ident cons) (Tuple es), expr) = do
+    _case (Cons cons es, expr) = do
         markSequenceCons cons e es
         expr <- expression expr
-        pure (Ident cons, expr)
+        pure (Cons cons [], expr)
 
 expression (App l r) = do
     l <- expression l
@@ -113,8 +113,8 @@ markSequence container es = f 0 $ NE.toList es
     f n (Ident s:xs) = mark container s n >> f (n + 1) xs
 
 -- | Mark identifiers in ascending order of memory access to be replaced by access expressions.
-markSequenceCons :: Symbol -> Expression -> NonEmpty Expression -> AccessResolver ()
-markSequenceCons cons container es = f 0 $ NE.toList es
+markSequenceCons :: Symbol -> Expression -> [Expression] -> AccessResolver ()
+markSequenceCons cons container es = f 0 es
     where
     f n [] = pure ()
     f n (Ident s:xs) = markCons cons container s n >> f (n + 1) xs

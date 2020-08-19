@@ -99,17 +99,17 @@ expression e = case e of
     Ident s -> do
         inside <- inLambda
         if inside
-        then do
-            a <- isParam s
-            a' <- isGlobal s
-            if a || a'
-            then pure $ Ident s
-            else do
-                b <- paramLookup s
-                case b of
-                    Just s' -> pure $ Ident s'
-                    Nothing -> Ident <$> promoteToParam s
-        else pure $ Ident s
+            then do
+                param <- isParam s
+                global <- isGlobal s
+                if param || global
+                    then pure $ Ident s
+                    else do
+                        b <- paramLookup s
+                        case b of
+                            Just s' -> pure $ Ident s'
+                            Nothing -> Ident <$> promoteToParam s
+            else pure $ Ident s
 
     App func@(Ident s) args -> do                 -- Call site
         a <- lookupCall s
@@ -150,7 +150,7 @@ expression e = case e of
         e <- expression e
         pure $ Access e index
 
-    Lit _ -> pure e
+    _ -> pure e
 
     where
     extendArgs func args count = case args of

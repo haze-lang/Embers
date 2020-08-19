@@ -40,6 +40,10 @@ expression :: Expression -> Infer TypeExpression
 expression (Lit (NUMBER _)) = intType
 expression (Lit (CHAR _)) = charType
 
+expression (Cons cons []) = expression (Ident cons)
+expression (Cons cons [arg]) = expression (App (Ident cons) arg)
+expression (Cons cons args) = expression (App (Ident cons) (Tuple $ NE.fromList args))
+
 expression (Ident v) = do
     c <- getContext
     maybe fresh return (M.lookup v c)

@@ -67,7 +67,8 @@ data TypeExpression
     deriving (Show, Eq)
 
 data Expression
-    = Access Expression AccessMode         -- Acess elements of a tuple/product type.
+    = Cons Symbol [Expression] -- Application of value constructors.
+    | Access Expression AccessMode         -- Acess elements of a tuple/product type.
     | App Expression Expression
     | Switch Expression (NonEmpty (Expression, Expression)) Expression
     | Conditional Expression Expression Expression
