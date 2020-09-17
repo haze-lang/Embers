@@ -87,7 +87,7 @@ statement s = case s of
                 markCall left stateVars
                 pure $ Assignment left new
         _ -> Assignment left <$> expression e
-    StmtExpr e -> StmtExpr <$> expression e
+    StmtExpr e -> mapStatement expression s
 
     where identName (Ident s) = s
 
@@ -124,33 +124,7 @@ expression e = case e of
         args <- expression args
         expression $ App l args     -- One more expression pass to resolve call site (effective only after TODO above is implemented).
 
-    App func args -> do
-        func <- expression func
-        App func <$> expression args
-
-    Tuple es -> Tuple <$> mapM expression es
-
-    Conditional e1 e2 e3 -> do
-        e1 <- expression e1
-        e2 <- expression e2
-        Conditional e1 e2 <$> expression e3
-
-    Switch e cases def -> do
-        e <- expression e
-        cases <- mapM _caseExpr cases
-        Switch e cases <$> expression def
-
-        where
-        _caseExpr (p, e) = do
-            p <- expression p
-            e <- expression e
-            pure (p, e)
-
-    Access e index -> do
-        e <- expression e
-        pure $ Access e index
-
-    _ -> pure e
+    _ -> mapExpression statement expression e
 
     where
     extendArgs func args count = case args of

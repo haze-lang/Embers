@@ -10,9 +10,11 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - Embers
-copyright: 2019 Syed Moiz Ur Rehman
+copyright: 2020 Syed Moiz Ur Rehman
 maintainer: syedmoizurrehman@hotmail.com
 dependencies:
+- flow
+- directory
 - speculate
 - MissingH
 - extra

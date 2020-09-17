@@ -37,6 +37,7 @@ data TypeError
     | ConditionalNonBool Expression TypeExpression
     | NonUnitAssignment TypeExpression
     | ReturnTypeMismatch TypeExpression TypeExpression
+    | MismatchingAssignment Symbol TypeExpression TypeExpression
 
 instance Show TypeError where
     show e = msg ++ "."
@@ -53,6 +54,7 @@ instance Show TypeError where
             MismatchingBranches l r -> "Branches of a conditional expression must have same type. " ++ printSource l ++ ", " ++ printSource r
             ConditionalNonBool e t -> "Expected Bool, but " ++ printSource e ++ " has type " ++ printSource t
             NonUnitAssignment t -> "Last statement is assignment so return type is expected to be Unit, but signature has type " ++ printSource t
-            ReturnTypeMismatch l r -> "Return type in signature is " ++ printSource l ++ ", but return statement has type " ++ printSource r
+            ReturnTypeMismatch l r -> "Return type in signature is " ++ printSource l ++ ", but return expression has type " ++ printSource r
+            MismatchingAssignment var varType valType -> printSource var ++ " has type " ++ printSource varType ++ " but a value of " ++ printSource valType ++ " is assigned"
 
         unexpected expected actual = "Expected " ++ printSource expected ++ ", found " ++ printSource actual

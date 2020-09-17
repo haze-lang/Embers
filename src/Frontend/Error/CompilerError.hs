@@ -22,9 +22,9 @@ module Frontend.Error.CompilerError where
 import Frontend.AbstractSyntaxTree
 import Frontend.Error.TypeError
 
-data CompilerError = Error ProgramElement Metadata ErrorPhase
+data CompilerError = Error ProgramElement Metadata ErrorPhase | LexicalError LexicalError Metadata
 
-data ErrorPhase = LexicalError LexicalError | ParseError ParseError | TypeError TypeError
+data ErrorPhase = ParseError ParseError | TypeError TypeError
 
 data MutationError = ParameterAssigned Parameter | ImmutableAssigned Symbol
     deriving Show
@@ -34,11 +34,12 @@ data NameResolutionError = UndefinedSymbol Symbol | UseBeforeDefinition Symbol
 data ParseError = TerminatorExpected
     deriving Show
 
-data LexicalError = UnsupportedCharacter Char | UnterminatedStringLiteral | FloatLiteral
-    deriving Show
+data LexicalError = UnsupportedCharacter Char | UnterminatedStringLiteral | FloatLiteral | UnterminatedCharLiteral
 
 instance Show CompilerError where
-    show (Error p m err) = show m ++ ": " ++ show err ++ "\nIn " ++ peName p ++ "\nAt "
+    show (LexicalError error m) = printMeta m ++ " Lexical Error: " ++ show error
+
+    show (Error p m err) = printMeta m ++ " " ++ show err ++ "\nIn " ++ peName p ++ "\nAt "
 
         where
         peName (Proc _ _ name _) = symStr name
@@ -47,6 +48,12 @@ instance Show CompilerError where
         peName (Ty (Record name _ _)) = symStr name
 
 instance Show ErrorPhase where
-    show (LexicalError err) = show err
-    show (ParseError err) = show err
+    show (ParseError err) = "Syntax Error:\n" ++ show err
     show (TypeError err) = "Type Error:\n" ++ show err
+
+instance Show LexicalError where
+    show err = case err of
+        UnsupportedCharacter c -> "Unsupported character: " ++ [c]
+        UnterminatedStringLiteral -> "Unterminated string literal"
+        FloatLiteral -> "Float literals not supported"
+        UnterminatedCharLiteral -> "Missing '"

@@ -38,6 +38,7 @@ import qualified Data.Map.Strict as M
 import Control.Monad.State
 import Data.List.NonEmpty (NonEmpty((:|)), (<|))
 import qualified CompilerUtilities.IntermediateProgram as IR
+import CompilerUtilities.SourcePrinter
 
 initializeTable :: TableState
 initializeTable = case runState stdLib (0, (0, M.fromList [])) of
@@ -250,6 +251,10 @@ exprType t (App l r) =
         (TArrow paramType retType) = tl
     in retType
 
+exprType t (Cons cons []) = exprType t (Ident cons)
+exprType t (Cons cons _) = case exprType t (Ident cons) of
+    (TArrow _ eType) -> eType
+
 exprType t (Access e Tag) = error $ show e
 -- exprType t (Access e Tag) = exprType t e
 exprType t (Access e (Member index)) =
@@ -369,7 +374,7 @@ showStruct (Just (_, maxSize, ctors)) = "\tMaxSize: " ++ show maxSize ++ "\tCtor
 showStruct Nothing = "Structure N/A"
 
 showRetType Nothing = "Type: Undefined"
-showRetType (Just typeExpr) = "Type: " ++ show typeExpr
+showRetType (Just typeExpr) = "Type: " ++ printSource typeExpr
 
 showScope ls = drop 1 $ foldr (\a b -> b ++ "." ++ a) "" ls
 

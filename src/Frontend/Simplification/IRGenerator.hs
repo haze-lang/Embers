@@ -48,17 +48,15 @@ compileIR (Program pes, (nextId, t)) = case runState (program initProgram) (init
     initProgram = filter arrow pes
 
     arrow p@Proc {} = True
-    arrow f@Func {} = True
     arrow _ = False
 
-program = mapM pe
-
-pe elem = do
-    block <- case elem of
-        Proc {} -> procedure elem
-        Func {} -> function elem
-    endProc
-    pure block
+program = mapM element
+    where
+    element elem = do
+        block <- case elem of
+            Proc {} -> procedure elem
+        endProc
+        pure block
 
 procedure (Proc params retType name body) = do
     last <- lastStatement (NE.last body)
@@ -67,10 +65,6 @@ procedure (Proc params retType name body) = do
     let instructions = concat instructions'
     let locals = nub $ catMaybes locals'
     pure $ Routine name (map fst params) locals (instructions ++ last)
-
-function (Func params retType name body) = do
-    body <- lastStatement (StmtExpr body)
-    pure $ Routine name (map fst params) [] body
 
 lastStatement :: Statement -> IRGen [Instruction]
 lastStatement stmt@(Assignment _ e) = do
@@ -117,9 +111,43 @@ expression e = case e of
 
         pure (Ref $ V temp, block)
 
-    Cons cons [] -> allocate cons Nothing
+    Cons s [] -> do
+        table <- getProg
+        let (TCons _type) = fromJust $ lookupType (symId s) table
+        (tagSize, size, ctors) <- getTypeDetails _type
+        let (EntryValCons _ _ _ (Just (index, _, _))) = fromJust $ M.lookup (symId s) table
+        case primitiveType table _type of
+            Just _ -> pure (Literal (NUMBER index), [])
+            Nothing -> do
+                t <- freshTemp
+                -- updateSize t QWord
+                pure (Ref $ V t, [Alloc (V t) size, Store (V t) 0 (Literal $ NUMBER index)])
 
-    Cons cons args -> allocate cons (Just $ Tuple $ NE.fromList args)
+    Cons cons right -> do
+        table <- getProg
+        let (pType `TArrow` (TCons retType)) = fromJust $ lookupType (symId cons) table
+        (tagSize, size, ctors) <- getTypeDetails retType
+        let (EntryValCons _ _ _ (Just (index, _, _))) = fromJust $ M.lookup (symId cons) table
+        t <- freshTemp
+        -- updateSize t QWord
+        (r, alloc) <- case right of
+            [e] -> do
+                let ctor = ctors !! index
+                let offset = fromJust $ M.lookup 0 ctor     -- 0 is used for obtaining offset of Tag.
+                (v, ins) <- expression e
+                pure (Ref $ V t, ins ++ [Store (V t) offset v])
+
+            es -> do
+                (vars', exprs) <- unzip <$> mapM expression es
+                vars'' <- mapM resultVar vars'
+                let (vars, es) = unzip vars''
+                let ctor = ctors !! index
+                let offsets = map (\index -> fromJust $ M.lookup index ctor) [0..]
+                let fla = concat es
+                let exprVarIndex = zip4 exprs vars [0..] offsets
+                xx <- pure $ concatMap (storeExpr t) exprVarIndex
+                pure (Ref $ V $ Temp (-100), fla++xx)
+        pure $ (Ref $ V t, [Alloc (V t) (size), Store (V t) 0 (Literal $ NUMBER index)] ++ alloc)
 
     App left right -> do
         table <- getProg
@@ -134,13 +162,12 @@ expression e = case e of
                 t <- freshTemp
                 (results, exprs) <- NE.unzip <$> mapM expression args
                 let argExprs = concat (NE.toList exprs)
-                -- let args = map LocalVar (NE.toList results)
                 pure (Ref $ V t, loadIns ++ argExprs ++ [Invoke callee (NE.toList results) t])
 
             _ -> do
-                (v, e) <- expression right
-                t <- freshTemp
-                pure (Ref $ V t, e ++ [Invoke callee [v] t])
+                (v, ins) <- expression right
+                resultTemp <- freshTemp
+                pure (Ref $ V resultTemp, ins ++ [Invoke callee [v] resultTemp])
 
     Access expr Tag -> do
         (r, e) <- expression expr
@@ -172,90 +199,24 @@ expression e = case e of
 
     Switch switch cases def -> expression switch
 
-    Ident s -> do
-        t <- getProg
-        if isArrow e t
-            then do
-                -- t <- getAssociatedVar s         -- TODO: AST Symbol
-                -- r <- freshTemp
-                -- pure [IR.Assign r (Unit $ LocalVar t)]
-                pure (Ref $ S s, [])
-            else do
-                -- t <- irVar s
-                -- r <- getVar
-                -- pure [IR.Assign r (Unit $ LocalVar t)]
-                pure (Ref $ S s, [])
+    Tuple es -> do
+        (size, offsets) <- tupleStructure e
+        t <- freshTemp
+        -- updateSize t QWord
+        (vars', exprs) <- NE.unzip <$> mapM expression es
+        (vars, ins') <- NE.unzip <$> mapM resultVar vars'
+        let exprVarIndexOffset = zip4 (NE.toList exprs) (NE.toList vars) [0..] offsets
+        let ins = concat ins' ++ concatMap (storeExpr t) exprVarIndexOffset
+        pure (Ref $ V $ t, Alloc (V t) size : ins)
+
+    Ident s -> pure (Ref $ S s, [])
 
     Lit l -> pure (Literal l, [])
 
     _ -> pure (Ref $ V $ Temp (-1), [])
 
-allocate s Nothing = do
-    -- error "a"
-    table <- getProg
-    let (TCons retType) = fromJust $ lookupType (symId s) table
-    (tagSize, size, ctors) <- getTypeDetails retType
-    let (EntryValCons _ _ _ (Just (index, _, _))) = fromJust $ M.lookup (symId s) table
-    case primitiveType table retType of
-        Just _ -> pure (Literal (NUMBER index), [])
-        -- Nothing -> pure [Alloc t size, Store t 0 (Literal $ NUMBER index)]
-        Nothing -> do
-            -- t <- freshTemp
-            -- updateSize t QWord
-            x <- getAllocMaster
-            case x of
-                Left t -> pure (Ref $ V t, [Alloc (V t) size, Store (V t) index (Literal $ NUMBER index)])
-                Right (t, index') -> pure (Ref $ V t, [Alloc (V t) size, Store (V t) index' (Literal $ NUMBER index)])
-
-allocate cons (Just right) = do
-    table <- getProg
-    let (pType `TArrow` (TCons retType)) = fromJust $ lookupType (symId cons) table
-    (tagSize, size, ctors) <- getTypeDetails retType
-    let (EntryValCons _ _ _ (Just (index, _, _))) = fromJust $ M.lookup (symId cons) table
-    t <- freshTemp
-    -- updateSize t QWord
-    (r, alloc) <- case right of
-        -- Ident s -> f (V t) s ctors index Nothing
-
-        -- App (Ident s) right' -> f (V t) s ctors index (Just right')
-
-        Tuple es -> do
-            (vars', exprs) <- NE.unzip <$> mapM expression es
-            vars'' <- mapM resultVar vars'
-            -- error $ show consCount
-            let (vars, es) = NE.unzip vars''
-            let ctor = ctors !! index
-            let offsets = map (\index -> fromJust $ M.lookup index ctor) [0..]
-            let fla = concat es
-            let exprVarIndex = zip4 (NE.toList exprs) (NE.toList vars) [0..] offsets
-            xx <- pure $ concatMap (storeExpr t) exprVarIndex
-            pure (Ref $ V $ Temp (-100), fla++xx)
-
-        _ -> do
-            let ctor = ctors !! index
-            let offset = fromJust $ M.lookup 0 ctor
-            (v, x) <- expression right
-            xx <- pure $ x ++ [Store (V t) offset v]
-            pure (Ref $ V $ Temp (-100), xx)
-
-    pure $ (Ref $ V t, [Alloc (V t) (size), Store (V t) 0 (Literal $ NUMBER index)] ++ alloc)
-
-    where
-    f t s ctors index args = do
-        let ctor = ctors !! index
-        let offset = fromJust $ M.lookup 0 ctor
-        v <- freshTemp
-        -- v <- pushNewResultVar
-        (r, alloc) <- allocate s args
-        -- popResultVar
-        pure (r, alloc ++ [Store t offset (Ref $ V v)])
-
-getAllocMaster = do
-    t <- freshTemp
-    pure $ Left t
-    pure $ Right (t, 2)
-
-storeExpr t (e, name, index, offset) = e ++ [Store (V t) offset (Ref name)]
+storeExpr :: Var -> ([Instruction], Name, c, Int) -> [Instruction]
+storeExpr t (ins, name, index, offset) = ins ++ [Store (V t) offset (Ref name)]
 
 typeSize typeExpr = case typeExpr of
     TCons s -> do
@@ -263,6 +224,25 @@ typeSize typeExpr = case typeExpr of
         pure $ maybe QWord varSize (primitiveType t s)
     TProd _ -> pure QWord    -- Tuples are passed around by reference
     TArrow _ _ -> pure QWord
+
+tupleStructure (Tuple es) = do
+    table <- getProg
+    let sizes = fmap (exprSize table) es
+    let offsets = getOffsets table 0 (NE.toList es)
+    pure (sum sizes, offsets)
+
+    where
+    getOffsets table n [x] = [n]
+    getOffsets table n (x:xs) = n : getOffsets table (n + exprSize table x) xs
+
+    exprSize table e = let eType = exprType table e
+        in case eType of
+            TCons s -> case primitiveType table s of
+                Just a -> a
+                Nothing -> 8   -- Ref
+            TProd _ -> 8
+            TArrow {} -> 8
+            a -> error $ show a
 
 tupleStructureType (TProd es) = do
     table <- getProg
@@ -295,7 +275,8 @@ resultVar x = case x of
 getTypeDetails :: Symbol -> IRGen TypeDetails
 getTypeDetails s = do
     t <- getProg
-    case fromJust $ M.lookup (symId s) t of
+    let (Just x) = M.lookup (symId s) t
+    case x of
         EntryTCons _ _ _ (Just (_, _, Just details)) -> pure details
         a -> error $ show a
 
@@ -324,8 +305,9 @@ initState t = initializeState initLocal t
     initLocal :: GenState
     initLocal = (M.empty, 0, 0)
 
-isArrow (AST.Ident s) table = case fromJust $ M.lookup (symId s) table of
-    EntryProc {} -> True
-    EntryFunc {} -> True
-    EntryLambda {} -> True
-    _ -> False
+isArrow (AST.Ident s) table = let (Just x) = M.lookup (symId s) table in
+    case x of
+        EntryProc {} -> True
+        EntryFunc {} -> True
+        EntryLambda {} -> True
+        _ -> False

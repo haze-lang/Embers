@@ -29,6 +29,7 @@ import qualified Data.List.NonEmpty as NE
 import Control.Monad (unless)
 import Control.Monad.State
 import Data.Maybe (fromJust)
+import Frontend.Error.CompilerError
 import Frontend.Error.TypeError
 import Frontend.AbstractSyntaxTree
 import Data.Map.Strict (Map)
@@ -38,9 +39,9 @@ import Frontend.TypeSystem.Inference.ConstraintGenerator
 import Frontend.TypeSystem.Inference.Unifier
 import CompilerUtilities.SourcePrinter
 
-type TypeChecker a = ExceptT TypeError (State TypeCheckerState) a
+type TypeChecker a = ExceptT CompilerError (State TypeCheckerState) a
 
-typeCheck :: ProgramState -> Either [TypeError] ProgramState
+typeCheck :: ProgramState -> Either [CompilerError] ProgramState
 typeCheck (p, t) = case runState (runExceptT program) $! initState p t of
     (Right p, (_, t, [])) -> Right (p, t)
     (Right p, (_, t, err)) -> Left err
@@ -68,10 +69,10 @@ procedure (Proc ps retType name stmts) = do
                 u <- unitStmt
                 pure $ fromList $ toList stmts ++ [u]
             else do
-                addError $ NonUnitAssignment retType
+                addError (NonUnitAssignment retType) (extractStmtMeta $ NE.last stmts)
                 pure stmts
         Just typeExpr -> do
-            assertWithError (ReturnTypeMismatch retType typeExpr) typeExpr retType
+            assertWithError (ReturnTypeMismatch retType typeExpr, extractStmtMeta $ NE.last stmts) typeExpr retType
             pure stmts
     pure $ Proc ps retType name stmts
 
@@ -85,8 +86,7 @@ procedure (Proc ps retType name stmts) = do
 
 function (Func ps retType name e) = do
     t <- expressionType e
-    a <- assertStructural t retType
-    unless a $ error $ "Return type in signature is " ++ show retType ++ ", but expression has type " ++ show t
+    assertWithError (ReturnTypeMismatch retType t, extractExprMeta e) t retType
     pure $ Func ps retType name e
 
 statementType (Assignment var r) = do
@@ -95,8 +95,7 @@ statementType (Assignment var r) = do
     case varType of
         Nothing -> defineVarType var t
         Just someType -> do
-            a <- assertStructural someType t
-            unless a $ error $ printSource var ++ " has type " ++ printSource someType ++ " but a value of " ++ printSource t ++ " is assigned."
+            assertWithError (MismatchingAssignment var someType t, symMeta var) someType t
     pure Nothing  -- Assignment statement has no type.
 
 statementType (StmtExpr e) = Just <$> expressionType e
@@ -120,10 +119,10 @@ expressionType (Conditional condition e1 e2) = do
     cType <- expressionType condition
     t <- getTable
     let b = boolId t
-    unless (assertNominal cType b) $ addError $ ConditionalNonBool condition cType
+    unless (assertNominal cType b) $ addError (ConditionalNonBool condition cType) (extractExprMeta condition)
     t1 <- expressionType e1
     t2 <- expressionType e2
-    assertWithError (MismatchingBranches t1 t2) t1 t2
+    assertWithError (MismatchingBranches t1 t2, extractExprMeta e1) t1 t2
     pure t1
 
 expressionType (Switch e cases def) = do
@@ -134,19 +133,19 @@ expressionType (Switch e cases def) = do
     firstType <- expressionType first
     mapM_ (_case firstType) caseExprs
     defType <- expressionType def
-    assertWithError (MismatchingDefault firstType defType) firstType defType
+    assertWithError (MismatchingDefault firstType defType, extractExprMeta def) firstType defType
     pure firstType
 
     where
     _pattern exprType p = do
         assignType p
         pType <- expressionType p
-        assertWithError (SwitchPatternMismatch exprType pType) exprType pType
+        assertWithError (SwitchPatternMismatch exprType pType, extractExprMeta e) exprType pType
 
         where
         assignType p = case p of
             Lit _ -> pure ()
-            Ident _ -> pure ()      -- Single identifier is a nullary value constructor.
+            Ident _ -> pure ()
             Tuple es -> assignProd es exprType
             Cons cons arg -> do
                 consType <- expressionType (Ident cons)
@@ -160,14 +159,14 @@ expressionType (Switch e cases def) = do
             assignProd es eType = case eType of
                 TProd tExpr -> if NE.length tExpr == NE.length es
                                 then mapM_ defineIdentType (NE.zip es tExpr)
-                                else throwError $ TupleElementMismatch es exprType
-                t -> throwError $ TuplePatternNonProdType t
+                                else throwCompilerError (TupleElementMismatch es exprType) (extractExprMeta p)
+                t -> throwCompilerError (TuplePatternNonProdType t) (extractExprMeta p)
 
                 where defineIdentType (Ident s, t) = defineVarType s t
 
     _case targetType caseExpr = do
         caseType <- expressionType caseExpr
-        assertWithError (MismatchingCaseTypes targetType caseType) targetType caseType
+        assertWithError (MismatchingCaseTypes targetType caseType, extractExprMeta caseExpr) targetType caseType
 
 expressionType (Cons cons []) = expressionType (Ident cons)
 expressionType (Cons cons [arg]) = expressionType (App (Ident cons) arg)
@@ -175,13 +174,13 @@ expressionType (Cons cons args) = expressionType (App (Ident cons) (Tuple (NE.fr
 
 expressionType (App l r) = do
     tl <- expressionType l
-    unless (isArrow tl) $ throwError $ NonArrowApplication l tl
+    unless (isArrow tl) $ throwCompilerError (NonArrowApplication l tl) (extractExprMeta l)
     let (TArrow paramType retType) = tl
-    tr <- expressionType r
+    argType <- expressionType r
     if isPolymorphic tl
-        then polymorphicApp l r tl tr
+        then polymorphicApp l r tl argType
         else do
-            assertWithError (ArgumentMismatch paramType tr) tr paramType
+            assertWithError (ArgumentMismatch paramType argType, extractExprMeta l) argType paramType
             pure retType
 
     where
@@ -206,7 +205,7 @@ inferType e = do
         Right context -> do
             mapM_ updateTable (M.toList context)
             setNextId nextId'
-        Left err -> throwError err
+        Left err -> throwCompilerError err (extractExprMeta e)
 
     where
     toContext :: TypeChecker (Map Symbol TypeExpression)
@@ -249,9 +248,9 @@ inferType e = do
             (program, (nextId, _), err) <- get
             put (program, (nextId, table), err)
 
-assertWithError err t1 t2 = do
+assertWithError (err, m) t1 t2 = do
     a <- assertStructural t1 t2
-    unless a $ addError err
+    unless a $ addError err m
 
 assertStructural (TArrow l1 r1) (TArrow l2 r2) = do
     b1 <- assertStructural l1 l2
@@ -273,7 +272,7 @@ assertStructural _ _ = pure False
 assertNominal (TProd (TCons source:|[])) target = source `cmpSymb` target
 assertNominal (TCons source) target = source `cmpSymb` target
 
-type TypeCheckerState = (Program, TableState, [TypeError])
+type TypeCheckerState = (Program, TableState, [CompilerError])
 
 initState :: Program -> TableState -> TypeCheckerState
 initState p t = (p, t, [])
@@ -302,7 +301,12 @@ getTable = get >>= \(_, (_, table), _) -> pure table
 
 getTableState = get >>= \(_, (id, table), _) -> pure (id, table)
 
-addError :: TypeError -> TypeChecker ()
-addError e = do
-    (a, b, c) <- get
-    put (a, b, e:c)
+throwCompilerError :: TypeError -> Metadata -> TypeChecker ()
+throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit $ NUMBER 1):|[])) m (TypeError error)
+
+addError :: TypeError -> Metadata -> TypeChecker ()
+addError err m = do
+    (p, t, errors) <- get
+    let pe = Proc [] (TVar $ getSym "") (getSym "SomeProc") ((StmtExpr $ Lit $ NUMBER 1):|[])
+    let error = Error pe m (TypeError err)
+    put (p, t, error:errors)

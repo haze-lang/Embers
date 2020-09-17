@@ -36,10 +36,11 @@ import Frontend.AbstractSyntaxTree
 import Data.List.NonEmpty as NE (NonEmpty((:|)), (<|), fromList, toList, map)
 import qualified Data.List.NonEmpty as NE
 import Data.Foldable (foldlM)
+import Frontend.Error.CompilerError
 
-resolveNames :: (Program, TableState) -> (Program, TableState)
+resolveNames :: (Program, TableState) -> Either [CompilerError] (Program, TableState)
 resolveNames (p, t) = case parse program (intState p t) of
-    Right (resultProgram, (_, _, t)) -> (resultProgram, t)
+    Right (resultProgram, (_, _, t)) -> Right (resultProgram, t)
     Left a -> error "Initialization failed."
 
 program :: NameResolver Program  

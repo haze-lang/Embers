@@ -67,8 +67,8 @@ data TypeExpression
     deriving (Show, Eq)
 
 data Expression
-    = Cons Symbol [Expression] -- Application of value constructors.
-    | Access Expression AccessMode         -- Acess elements of a tuple/product type.
+    = Cons Symbol [Expression]              -- Application of value constructors.
+    | Access Expression AccessMode          -- Acess elements of a tuple/product type.
     | App Expression Expression
     | Switch Expression (NonEmpty (Expression, Expression)) Expression
     | Conditional Expression Expression Expression
@@ -81,7 +81,7 @@ data Expression
 data AccessMode
     = Tag
     | Member Int
-    | ConsMember Int Int -- ConsIndex ValIndex
+    | ConsMember Int Int                    -- ConsIndex, ValIndex
     deriving (Show, Eq)
 
 data Literal
@@ -111,11 +111,81 @@ data LambdaExpression
 
 -- Utilities
 
+extractStmtMeta :: Statement -> Metadata
+extractStmtMeta (Assignment (Symb _ m) _) = m
+extractStmtMeta (StmtExpr e) = extractExprMeta e
+
+extractExprMeta :: Expression -> Metadata
+extractExprMeta e = case e of
+    Cons cons _ -> symMeta cons
+    Access e _ -> extractExprMeta e
+    App l _ -> extractExprMeta l
+    Switch e _ _ -> extractExprMeta e
+    Conditional e _ _ -> extractExprMeta e
+    Lambda (ProcLambda name _ _) -> symMeta name
+    Lambda (FuncLambda name _ _) -> symMeta name
+    Tuple (e:|es) -> extractExprMeta e
+    Ident s -> symMeta s
+    _ -> Meta 0 0 "??"
+
+printMeta (Meta c l "") = show l ++ ":" ++ show c
+printMeta (Meta c l f) = f ++ ":" ++ show l ++ ":" ++ show c ++ ":"
+
+mapStatement :: Monad m => (Expression -> m Expression) -> Statement -> m Statement
+mapStatement f s = case s of
+    Assignment left e -> Assignment left <$> f e
+    StmtExpr e -> StmtExpr <$> f e
+
+-- | Transform (apply a closed function to) an expression recusively with given functions for statements (f) and expressions (g) which handle relevant cases.
+mapExpression :: Monad m => (Statement -> m Statement) -> (Expression -> m Expression) -> Expression -> m Expression
+mapExpression f g e = case e of
+    Cons cons args -> Cons cons <$> mapM g args
+
+    Access e mode -> do
+        e <- g e
+        pure $ Access e mode
+
+    App left right -> do
+        left <- g left
+        App left <$> g right
+
+    Switch e cases def -> do
+        e <- g e
+        cases <- mapM _case cases
+        Switch e cases <$> g def
+
+        where
+        _case (left, right) = do
+            left <- g left
+            right <- g right
+            pure (left, right)
+
+    Conditional cond eThen eElse -> do
+        cond <- g cond
+        eThen <- g eThen
+        Conditional cond eThen <$> g eElse
+
+    Lambda (ProcLambda name params body) -> do
+        body <- mapM f body
+        pure $ Lambda $ ProcLambda name params body
+
+    Lambda (FuncLambda name params body) -> do
+        body <- g body
+        pure $ Lambda $ FuncLambda name params body
+
+    Tuple es -> Tuple <$> mapM g es
+
+    a -> pure a
+
 symStr (Symb (IDENTIFIER x) _) = x
 symStr (Symb (ResolvedName _ (x:|_)) _) = x
 
 symId (Symb (ResolvedName id _) _) = id
 symId (Symb (IDENTIFIER x) _) = error x
+
+symMeta (Symb _ m) = m
+
+symTrace (Symb (ResolvedName _ scopeTrace) _) = scopeTrace
 
 cmpSymb s1 s2 = symId s1 == symId s2
 
@@ -128,8 +198,6 @@ symToParam s = Param s ByVal
 getSym name = Symb (IDENTIFIER name) (Meta 0 0 "")
 
 getSymWithId id name = Symb (ResolvedName id (name:|["Global"])) (Meta 0 0 "")
-
-symTrace (Symb (ResolvedName _ scopeTrace) _) = scopeTrace
 
 instance Eq Identifier where
     (IDENTIFIER a) == (IDENTIFIER b) = a == b

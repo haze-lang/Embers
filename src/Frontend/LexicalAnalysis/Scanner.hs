@@ -1,4 +1,3 @@
-{-# LANGUAGE PatternSynonyms #-}
 {-
 Copyright (C) 2019  Syed Moiz Ur Rehman
 
@@ -18,6 +17,8 @@ You should have received a copy of the GNU General Public License
 along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
+{-# LANGUAGE PatternSynonyms #-}
+
 module Frontend.LexicalAnalysis.Scanner
 (
     scan,
@@ -32,10 +33,11 @@ import Control.Applicative
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Char
+import Frontend.Error.CompilerError
 
 -- |Scans the given string and returns list of tokens.
-scan :: String -> Either [Error] [Token]
-scan str = case parse (many root) (initState str) of
+scan :: Filename -> String -> Either [CompilerError] [Token]
+scan filename source = case parse (many root) (initState (filename, source)) of
     Right (tokens, (Str [] m, [])) -> Right $ concatNE tokens
     Right (tokens, (Str _ m, e)) -> Left e
     Left (Str _ m, e) -> Left e
@@ -53,7 +55,7 @@ keywordsIdent = do
         Just t -> pure t
         Nothing -> pure id
 
-getKeyword str = case parse keywords (initState str) of
+getKeyword str = case parse keywords (initState ("", str)) of
     Right (kword, (Str [] _, [])) -> Just kword
     _ -> Nothing
 
@@ -185,7 +187,7 @@ charLit = do
         c <- alphanum
         tryChar '\''
         pure $ NEHead $ T (TkLit $ CHAR c) m
-        <|> failToken "Mismatched \'." m
+        <|> failToken UnterminatedCharLiteral m
 
 stringLit :: Lexer (NonEmpty Token)
 stringLit = do
@@ -195,7 +197,7 @@ stringLit = do
         x <- many alphanumSpace
         tryChar '"'
         pure $ resolveStrLiteral x m
-        <|> failToken "Mismatched \"." m
+        <|> failToken UnterminatedStringLiteral m
 
 unitLit :: Lexer (NonEmpty Token)
 unitLit = do
@@ -228,16 +230,14 @@ line = do
     nl <- newline
     pure $ NEHead $ T (WHITESPACE Newline) m
 
-failToken :: String -> Metadata -> Lexer (NonEmpty Token)
-failToken message m = P $ \(src, err) -> Right (NEHead $ T (Invalid message) m, (src, err ++ [formMessage message m]))
-    where formMessage str (Meta c l _) = "At line " ++ show l ++ ", cloumn " ++ show c ++ ": " ++ str
+failToken :: LexicalError -> Metadata -> Lexer (NonEmpty Token)
+failToken error m = P $ \(src, err) -> Right (NEHead $ T (Invalid (show error)) m, (src, err ++ [LexicalError error m]))
 
-type Error = String
-type LexerState = (StrSource, [Error])
+type LexerState = (StrSource, [CompilerError])
 type Lexer a = AbsParser LexerState a
 
-initState :: String -> LexerState
-initState str = (Str str (Meta 1 1 ""), [])
+initState :: (Filename, String) -> LexerState
+initState (filename, source) = (Str source (Meta 1 1 filename), [])
 
 -- State Manipulation
 
@@ -306,8 +306,8 @@ resolveStrLiteral s m = T LPAREN m :| g s ++ [T RPAREN m]
 
     cons c = [T (TkIdent (IDENTIFIER "Cons")) m, T LPAREN m, T (TkLit (CHAR c)) m]
 
-scanProcessed str = do
-    tokens <- scan str
+scanProcessed filename source = do
+    tokens <- scan filename source
     let processedTokens = filter (not.isSpaceToken) tokens
     pure processedTokens
 

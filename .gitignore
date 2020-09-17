@@ -3,4 +3,4 @@ Embers.cabal
 *~
 .vscode
 .ghci
-src/CompilerUtilities/DebugUtil.hs
+app/DebugUtil.hs

@@ -35,9 +35,7 @@ procedure (Proc params retType name body) = Proc params retType name <$> mapM st
 
 function (Func params retType name body) = Func params retType name <$> expression body
 
-statement s = case s of
-    Assignment v e -> Assignment v <$> expression e
-    StmtExpr e -> StmtExpr <$> expression e
+statement = mapStatement expression
 
 expression original@(Switch e cases def) = do
     let firstPattern = fst $ NE.head cases
@@ -87,23 +85,8 @@ expression (App l r) = do
         h n [] = []
         h n (t:ts) = Access (Ident s) (Member n) : h (n + 1) ts
 
-expression (Conditional c e1 e2) = do
-    c <- expression c
-    e1 <- expression e1
-    Conditional c e1 <$> expression e2
-
-expression (Tuple es) = Tuple <$> mapM expression es
-
-expression (Lambda (ProcLambda name param body)) = do
-    body <- mapM statement body
-    pure $ Lambda $ ProcLambda name param body
-
-expression (Lambda (FuncLambda name param body)) = do
-    body <- expression body
-    pure $ Lambda $ FuncLambda name param body
-
 expression e@(Ident s) = fromMaybe e <$> lookupAccess s
-expression e = pure e
+expression e = mapExpression statement expression e
 
 -- | Mark identifiers in ascending order of memory access to be replaced by access expressions.
 markSequence :: Expression -> NonEmpty Expression -> AccessResolver ()

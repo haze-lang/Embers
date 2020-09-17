@@ -34,21 +34,22 @@ import Data.Either (Either(Left, Right))
 import qualified Data.Map.Strict as M
 import qualified Frontend.LexicalAnalysis.Scanner
 import Frontend.LexicalAnalysis.Token
+import Frontend.Error.CompilerError
 
 -- | Parses the given token stream and returns syntax tree.
-parseTokens :: [Token] -> ProgramState
+parseTokens :: [Token] -> Either [CompilerError] ProgramState
 parseTokens src = case parse program $ initParserState src initializeTable of
-    Right (p, ([], _, _, t, err)) -> (p, t)
+    Right (p, ([], _, _, t, err)) -> Right (p, t)
     Right (p, (ts, _, _, t, err)) -> error $ "Parser did not consume input. Remaining: " ++ show ts
     Left _ -> error "Syntax error."
 
-parseTokensStdLib :: [Token] -> [Token] -> ProgramState
+parseTokensStdLib :: [Token] -> [Token] -> Either [CompilerError] ProgramState
 parseTokensStdLib stdLib src = case parse standardLibrary $ initParserState stdLib (0, M.empty) of
     Right (Program stdLibElements, ([], _, _, t, err)) -> case parse program $ initParserState src (initializeTableWith t) of
-        Right (Program pes, ([], _, _, t, err)) -> (Program (stdLibElements ++ pes), t)
+        Right (Program pes, ([], _, _, t, err)) -> Right (Program (stdLibElements ++ pes), t)
         Right (p, (ts, _, _, t, err)) -> error $ "Parser did not consume input. Remaining: " ++ show ts
         Left _ -> error "Syntax error."
-    
+
     Right (p, (ts, _, _, t, err)) -> error $ "Standard Library: Parser did not consume input. Remaining: " ++ show ts
     Left _ -> error "Standard Library: Syntax error."
 
