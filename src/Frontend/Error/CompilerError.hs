@@ -20,9 +20,10 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 module Frontend.Error.CompilerError where
 
 import Frontend.AbstractSyntaxTree
+import Frontend.Error.ParseError
 import Frontend.Error.TypeError
 
-data CompilerError = Error ProgramElement Metadata ErrorPhase | LexicalError LexicalError Metadata
+data CompilerError = Error ProgramElement Metadata ErrorPhase | LexicalError LexicalError Metadata | MiscError
 
 data ErrorPhase = ParseError ParseError | TypeError TypeError
 
@@ -31,12 +32,11 @@ data MutationError = ParameterAssigned Parameter | ImmutableAssigned Symbol
 
 data NameResolutionError = UndefinedSymbol Symbol | UseBeforeDefinition Symbol
 
-data ParseError = TerminatorExpected
-    deriving Show
-
 data LexicalError = UnsupportedCharacter Char | UnterminatedStringLiteral | FloatLiteral | UnterminatedCharLiteral
 
 instance Show CompilerError where
+    show (MiscError) = "Empty error"
+
     show (LexicalError error m) = printMeta m ++ " Lexical Error: " ++ show error
 
     show (Error p m err) = printMeta m ++ " " ++ show err ++ "\nIn " ++ peName p ++ "\nAt "
@@ -57,3 +57,12 @@ instance Show LexicalError where
         UnterminatedStringLiteral -> "Unterminated string literal"
         FloatLiteral -> "Float literals not supported"
         UnterminatedCharLiteral -> "Missing '"
+
+instance Semigroup CompilerError where
+    MiscError <> e@(Error {}) = e
+    MiscError <> e@(LexicalError {}) = e
+    MiscError <> MiscError = MiscError
+    a <> MiscError = MiscError <> a
+
+instance Monoid CompilerError where
+    mempty = MiscError

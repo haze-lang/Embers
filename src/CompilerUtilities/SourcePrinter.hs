@@ -10,6 +10,9 @@ import Frontend.AbstractSyntaxTree
 class SourcePrinter a where
     printSource :: a -> String
 
+instance SourcePrinter Program where
+    printSource (Program elements) = printSourceList elements "\n"
+
 instance SourcePrinter TypeExpression where
     printSource (TVar v) = printSource v
     printSource (TArrow l r) = f l ++ " -> " ++ f r

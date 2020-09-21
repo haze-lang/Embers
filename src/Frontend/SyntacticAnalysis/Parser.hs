@@ -18,40 +18,58 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
 module Frontend.SyntacticAnalysis.Parser
-
+(
+    parseTokens,
+    parseTokensStdLib,
+)
 where
+
+import Control.Applicative
+import Control.Monad.Except
+import Control.Monad.Identity
+import Control.Monad.State
+import qualified Data.List.NonEmpty as NE
+import Data.List.NonEmpty (NonEmpty((:|)), (<|), fromList, toList, reverse)
+import qualified Data.Map as M
+import qualified Data.Char
 
 import Frontend.AbstractSyntaxTree
 import CompilerUtilities.ProgramTable
-import CompilerUtilities.AbstractParser
-import Control.Applicative
-import Control.Monad (when, unless)
-import Data.Foldable (foldlM)
-import Data.Char (isUpper, isLower)
-import Data.List.NonEmpty (NonEmpty((:|)), (<|), fromList, toList, reverse)
-import qualified Data.List.NonEmpty as NE
-import Data.Either (Either(Left, Right))
-import qualified Data.Map.Strict as M
-import qualified Frontend.LexicalAnalysis.Scanner
-import Frontend.LexicalAnalysis.Token
+import Frontend.Error.ParseError
 import Frontend.Error.CompilerError
+import Frontend.LexicalAnalysis.Token
+
+type Parser a = StateT ParserState (Except CompilerError) a
+
+{-
+    Except placed inside StateT so that upon failure (empty, <|>, throwError), changes in state are discarded.
+
+    No Maybe/Either/ExceptT like
+
+    StateT s (ExceptT e Maybe) a
+
+    is required inside StateT since Except acts as Either and Monoid instance of CompilerError takes care of creating values out of thin air (The Misc constructor).
+ -}
+
+runParser p s = runExceptT (runStateT p s)
 
 -- | Parses the given token stream and returns syntax tree.
 parseTokens :: [Token] -> Either [CompilerError] ProgramState
-parseTokens src = case parse program $ initParserState src initializeTable of
-    Right (p, ([], _, _, t, err)) -> Right (p, t)
-    Right (p, (ts, _, _, t, err)) -> error $ "Parser did not consume input. Remaining: " ++ show ts
-    Left _ -> error "Syntax error."
+parseTokens src = case runParser program (initParserState src initializeTable) of
+    Identity (Right (p, ([], _, _, t, []))) -> Right (p, t)
+    Identity (Right (_, (_, _, _, _, errors))) -> Left errors
+    Identity (Left err) -> Left [err]
 
 parseTokensStdLib :: [Token] -> [Token] -> Either [CompilerError] ProgramState
-parseTokensStdLib stdLib src = case parse standardLibrary $ initParserState stdLib (0, M.empty) of
-    Right (Program stdLibElements, ([], _, _, t, err)) -> case parse program $ initParserState src (initializeTableWith t) of
-        Right (Program pes, ([], _, _, t, err)) -> Right (Program (stdLibElements ++ pes), t)
-        Right (p, (ts, _, _, t, err)) -> error $ "Parser did not consume input. Remaining: " ++ show ts
-        Left _ -> error "Syntax error."
+parseTokensStdLib stdLib src = case runParser standardLibrary (initParserState stdLib (0, M.empty)) of
+    Identity (Right (Program stdLibElements, ([], _, _, t, []))) ->
+        case runParser program (initParserState src (initializeTableWith t)) of
+            Identity (Right (Program pes, ([], _, _, t, []))) -> Right (Program (stdLibElements ++ pes), t)
+            Identity (Right (_, (_, _, _, _, errors))) -> Left errors
+            Identity (Left err) -> Left [err]
 
-    Right (p, (ts, _, _, t, err)) -> error $ "Standard Library: Parser did not consume input. Remaining: " ++ show ts
-    Left _ -> error "Standard Library: Syntax error."
+    Identity (Right (p, (ts, _, _, t, errors))) -> Left errors
+    Identity (Left err) -> Left [err]
 
 standardLibrary :: Parser Program
 standardLibrary = Program <$> many typesValues
@@ -349,8 +367,9 @@ lambdaExpr :: Parser Expression
 lambdaExpr = procLambdaExpr <|> funcLambdaExpr
     where
     procLambdaExpr = do
-        name <- pushScopeLambda Procedure
         params <- formalParam
+        let lambdaMeta = getLambdaMeta params
+        name <- pushScopeLambda lambdaMeta Procedure
         params <- mapM defLambdaParam (toList params)
         token DARROW
         many wspace
@@ -359,8 +378,9 @@ lambdaExpr = procLambdaExpr <|> funcLambdaExpr
             pure $ Lambda $ ProcLambda name (fromList params) b
 
     funcLambdaExpr = do
-        name <- pushScopeLambda Function
         params <- formalParam
+        let lambdaMeta = getLambdaMeta params
+        name <- pushScopeLambda lambdaMeta Function
         params <- mapM defLambdaParam (toList params)
         token DARROW
         do  e <- application <|> expression
@@ -368,6 +388,8 @@ lambdaExpr = procLambdaExpr <|> funcLambdaExpr
             pure $ Lambda $ FuncLambda name (fromList params) e
 
     defLambdaParam (Param name c) = defineName name (ExprVal Nothing) >>= \name -> pure (Param name c)
+
+    getLambdaMeta params = case paramMeta $ NE.head params of Meta c l f -> Meta (c-1) l f
 
 tuple :: Parser Expression
 tuple = do
@@ -400,31 +422,11 @@ _pattern = literal <|> tuplePattern <|> valConsPattern
 
     definedIdent = ident >>= \x -> defineName x (ExprVal Nothing)
 
--- State
-
-type LambdaNo = Int
-type VParamNo = Int
-type MiscState = (LambdaNo, VParamNo)
-type ErrorState = [String]
-type ScopeState = (Scope, AbsoluteName)
-type ParserState = ([Token], ScopeState, MiscState, TableState, ErrorState)
-
-initParserState :: [Token] -> TableState -> ParserState
-initParserState ts t = (ts, (Global, "Global" :| []), (0, 0), t, [])
-
-type Parser a = AbsParser ParserState a
-
--- State Manipulation
-item :: Parser Token
-item = P $ \(inp, name, lambdaNo, t, err) -> case inp of
-            (x:xs) -> Right (x, (xs, name, lambdaNo, t, err))
-            a -> Left (a, name, lambdaNo, t, err)
-
 -- Parser Helpers
 
 validateNames :: Symbol -> Symbol -> Parser ()
 validateNames name nameTypeSig = when (symStr name /= symStr nameTypeSig) $
-        addError $ "Type Signature and Definition have mismatching names: " ++ symStr name
+        addError (MismatchingSignatureNames name nameTypeSig) (symMeta nameTypeSig)
 
 -- | If Data Constructor has same name as Type, add _C suffix to constructor.
 handleSameCons (Symb (IDENTIFIER cons) m) typeName =
@@ -441,7 +443,7 @@ terminator = token SEMICOLON
 
 ident :: Parser Symbol
 ident = do
-    x <- item
+    x <- next
     case x of
         T (TkIdent name) m -> pure $ Symb name m
         _ -> empty
@@ -469,21 +471,21 @@ startsWithUpper = do
 
 symbIdent :: Parser Symbol
 symbIdent = do
-    x <- item
+    x <- next
     case x of
         T (TkSymb name) m -> pure $ Symb name m
         _ -> empty
 
 literal :: Parser Expression
 literal = do
-    x <- item
+    x <- next
     case x of
         T (TkLit lit) _ -> pure $ Lit lit
         _ -> empty
 
 wspace :: Parser Whitespace
 wspace = do
-    x <- item
+    x <- next
     case x of
         T (WHITESPACE ws) _ -> pure ws
         _ -> empty
@@ -492,12 +494,11 @@ token :: TokenType -> Parser Token
 token x = sat (== x)
 
     where
-    sat :: (TokenType -> Bool) -> Parser Token
     sat p = do
-        (T x m) <- item
-        if p x
-        then pure (T x m)
-        else empty
+        (T t m) <- next
+        if p t
+            then pure (T t m)
+            else empty
 
 bindParams (TArrow (TVar a) retType) (param:|[]) = pure ([(param, TVar a)], retType)
 bindParams (TArrow (TCons a) retType) (param:|[]) = pure ([(param, TCons a)], retType)
@@ -548,12 +549,14 @@ replaceTypeVars = foldr updateTypeVar
 
         where sameName new old = if symStr new == symStr old then new else old
 
--- Errors
-
-addError :: String -> Parser ()
-addError message = P $ \(inp, scope, lambdaNo, table, err) -> Right ((), (inp, scope, lambdaNo, table, ("Parse Error: " ++ message):err))
-
--- Scope
+next :: Parser Token
+next = do
+    (inp, name, lambdaNo, t, err) <- get
+    case inp of
+        x:xs -> do
+            put (xs, name, lambdaNo, t, err)
+            pure x
+        [] -> empty
 
 data CurrentElement = Procedure | Function | Constructor | Type | ExprVal (Maybe TypeExpression) | TypeVar
     deriving Show
@@ -566,7 +569,7 @@ resolveName name = do
 
 resolve :: Symbol -> Parser (Maybe Symbol)
 resolve (Symb (IDENTIFIER name) m) = do
-    (_, (_, absName), _, (_, table), _) <- getState
+    (_, (_, absName), _, (_, table), _) <- get
     resolve' name absName absName table
 
     where
@@ -595,7 +598,7 @@ defineName name elem = do
 -- | Defines the name and begins an attached scope.
 beginScope :: Symbol -> CurrentElement -> Parser Symbol
 beginScope (Symb (IDENTIFIER name) m) elem = do
-    (inp, (scopeId, ns), lambdaNo, (id, _), err) <- getState
+    (inp, (scopeId, ns), lambdaNo, (id, _), err) <- get
     let absName = name <| ns
     id <- insertEntry $ case elem of
         Procedure -> EntryProc (Symb (ResolvedName id absName) m) absName scopeId Nothing
@@ -606,41 +609,47 @@ beginScope (Symb (IDENTIFIER name) m) elem = do
         TypeVar -> EntryTVar (Symb (ResolvedName id absName) m) absName scopeId
 
     -- TableState is changed after insertion, so we extract the updated table.
-    (_, _, _, tableState, _) <- getState
-    setState (inp, (Scope id, absName), lambdaNo, tableState, err)
+    (_, _, _, tableState, _) <- get
+    put (inp, (Scope id, absName), lambdaNo, tableState, err)
     pure $ Symb (ResolvedName id absName) m
 
-pushScopeLambda :: CurrentElement -> Parser Symbol
-pushScopeLambda elem = do
+pushScopeLambda :: Metadata -> CurrentElement -> Parser Symbol
+pushScopeLambda m elem = do
     lambdaNo <- freshLambdaNo
-    beginScope (getSym $ "_L" ++ show lambdaNo) elem        -- TODO: Metadata is default instead of where the λ expressions starts
+    beginScope (Symb (IDENTIFIER $ "_L" ++ show lambdaNo) m) elem
 
     where
-    freshLambdaNo = P $ \(inp, scope, (lambdaNo, vp), table, err) ->
-        Right (lambdaNo, (inp, scope, (lambdaNo + 1, vp), table, err))
+    freshLambdaNo = do
+        (inp, scope, (lambdaNo, vp), table, err) <- get
+        put (inp, scope, (lambdaNo + 1, vp), table, err)
+        pure lambdaNo
 
 -- | Pops current scope, updating scope state to point to parent scope.
 endScope :: Parser ()
 endScope = do
-    (inp, (scopeId, n:|ns), lambdaNo, table, err) <- getState
-    setState (inp, (scopeId, fromList ns), lambdaNo, table, err)
+    (inp, (scopeId, n:|ns), lambdaNo, table, err) <- get
+    put (inp, (scopeId, fromList ns), lambdaNo, table, err)
     updateScopeId
 
     where
     updateScopeId = do
-        s <- getState
+        s <- get
         let (inp, (Scope scopeId, ns), lambdaNo, (nextId, table), err) = s
         let parentScope = idToScope scopeId table
-        setState (inp, (parentScope, ns), lambdaNo, (nextId, table), err)
+        put (inp, (parentScope, ns), lambdaNo, (nextId, table), err)
 
 freshVirtualParam = do
     vpNo <- consumeVirtualParam
     pure $ Symb (IDENTIFIER ("_p" ++ show vpNo)) (Meta 0 0 "")
 
-    where consumeVirtualParam = P $ \(inp, scope, (lNo, vpNo), table, err) -> Right (vpNo, (inp, scope, (lNo, vpNo + 1), table, err))
+    where
+    consumeVirtualParam = do
+        (inp, scope, (lNo, vpNo), table, err) <- get
+        put (inp, scope, (lNo, vpNo + 1), table, err)
+        pure vpNo
 
 defineNameInParent (Symb (IDENTIFIER name) m) elem = do
-    s <- getState
+    s <- get
     let (inp, (scope, n:|ns), lambdaNo, (_, table), err) = s
     let absName = name:|ns
     let parentScope = case scope of
@@ -654,12 +663,35 @@ defineNameInParent (Symb (IDENTIFIER name) m) elem = do
         ExprVal varType -> EntryVar (Symb (IDENTIFIER name) m) absName parentScope varType
 
     -- TableState is changed after insertion, so we extract the updated table.
-    (_, _, _, table, _) <- getState
-    setState (inp, (Scope id, n:|ns), lambdaNo, table, err)
+    (_, _, _, table, _) <- get
+    put (inp, (Scope id, n:|ns), lambdaNo, table, err)
     pure $ Symb (ResolvedName id absName) m
 
 insertEntry :: TableEntry -> Parser ID
-insertEntry entry = P $ \(inp, s, lambdaNo, (id, table), err) ->
+insertEntry entry = do
+    (inp, s, lambdaNo, (id, table), err) <- get
     case insertTableEntry id entry table of
-        Just t -> Right (id, (inp, s, lambdaNo, (id + 1, t), err))
-        Nothing -> Left (inp, s, lambdaNo, (id, table), err)
+        Just newTable -> do
+            put (inp, s, lambdaNo, (id + 1, newTable), err)
+            pure id
+        Nothing -> empty
+
+throwCompilerError :: ParseError -> Metadata -> Parser ()
+throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit $ NUMBER 1):|[])) m (ParseError error)
+
+addError :: ParseError -> Metadata -> Parser ()
+addError parseError m =
+    let error = Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit $ NUMBER 1):|[])) m (ParseError parseError)
+    in modify (\(inp, s, lambdaNo, (id, table), err) ->
+        (inp, s, lambdaNo, (id, table), error:err))
+
+type LambdaNo = Int
+type VirtualParamNo = Int
+type GenState = (LambdaNo, VirtualParamNo)
+
+type ErrorState = ([CompilerError])
+type ScopeState = (Scope, AbsoluteName)
+type ParserState = ([Token], ScopeState, GenState, TableState, ErrorState)
+
+initParserState :: [Token] -> TableState -> ParserState
+initParserState tokens t = (tokens, (Global, "Global" :| []), (0, 0), t, [])
