@@ -13,6 +13,8 @@ tests:
 copyright: 2020 Syed Moiz Ur Rehman
 maintainer: syedmoizurrehman@hotmail.com
 dependencies:
+- ansi-terminal
+- filepath
 - flow
 - directory
 - speculate

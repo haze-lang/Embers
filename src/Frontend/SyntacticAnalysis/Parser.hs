@@ -35,8 +35,9 @@ import qualified Data.Char
 
 import Frontend.AbstractSyntaxTree
 import CompilerUtilities.ProgramTable
-import Frontend.Error.ParseError
 import Frontend.Error.CompilerError
+import Frontend.Error.ParseError
+import Frontend.Error.NameResolutionError
 import Frontend.LexicalAnalysis.Token
 
 type Parser a = StateT ParserState (Except CompilerError) a
@@ -565,7 +566,7 @@ resolveName name = do
     resolvedName <- resolve name
     case resolvedName of
         Just (Symb (ResolvedName id n) m) -> pure $ Symb (ResolvedName id n) m
-        Nothing -> empty
+        Nothing -> throwCompilerError (NameResolutionError $ UndefinedSymbol name) (symMeta name)
 
 resolve :: Symbol -> Parser (Maybe Symbol)
 resolve (Symb (IDENTIFIER name) m) = do
@@ -676,8 +677,8 @@ insertEntry entry = do
             pure id
         Nothing -> empty
 
-throwCompilerError :: ParseError -> Metadata -> Parser ()
-throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit $ NUMBER 1):|[])) m (ParseError error)
+throwCompilerError :: ErrorPhase -> Metadata -> Parser a
+throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit $ NUMBER 1):|[])) m error
 
 addError :: ParseError -> Metadata -> Parser ()
 addError parseError m =

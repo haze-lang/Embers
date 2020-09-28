@@ -21,21 +21,20 @@ module Frontend.Error.CompilerError where
 
 import Frontend.AbstractSyntaxTree
 import Frontend.Error.ParseError
+import Frontend.Error.NameResolutionError
 import Frontend.Error.TypeError
 
 data CompilerError = Error ProgramElement Metadata ErrorPhase | LexicalError LexicalError Metadata | MiscError
 
-data ErrorPhase = ParseError ParseError | TypeError TypeError
+data ErrorPhase = ParseError ParseError | NameResolutionError NameResolutionError | TypeError TypeError
 
 data MutationError = ParameterAssigned Parameter | ImmutableAssigned Symbol
     deriving Show
 
-data NameResolutionError = UndefinedSymbol Symbol | UseBeforeDefinition Symbol
-
 data LexicalError = UnsupportedCharacter Char | UnterminatedStringLiteral | FloatLiteral | UnterminatedCharLiteral
 
 instance Show CompilerError where
-    show (MiscError) = "Empty error"
+    show MiscError = "Empty error"
 
     show (LexicalError error m) = printMeta m ++ " Lexical Error: " ++ show error
 
@@ -49,6 +48,7 @@ instance Show CompilerError where
 
 instance Show ErrorPhase where
     show (ParseError err) = "Syntax Error:\n" ++ show err
+    show (NameResolutionError err) = "Syntax Error:\n" ++ show err
     show (TypeError err) = "Type Error:\n" ++ show err
 
 instance Show LexicalError where
@@ -63,6 +63,7 @@ instance Semigroup CompilerError where
     MiscError <> e@(LexicalError {}) = e
     MiscError <> MiscError = MiscError
     a <> MiscError = MiscError <> a
+    a <> b = error $ "<SEMIGROUP>\n" ++ show a ++ "\n" ++ show b
 
 instance Monoid CompilerError where
     mempty = MiscError

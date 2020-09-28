@@ -23,32 +23,37 @@ module Frontend.StaticAnalysis.NameResolver
 )
 where
 
-import Control.Monad (when)
-import Control.Applicative (many)
-import Data.Maybe (isJust, fromMaybe)
-import CompilerUtilities.AbstractParser
+
+import Control.Monad.State
+import Control.Monad.Except
+import Data.Maybe (fromMaybe)
+-- import CompilerUtilities.AbstractParser
 import qualified Data.Char (isUpper)
 import qualified Data.Map.Strict as M
+import Data.Set (Set)
+import qualified Data.Set as S
 import CompilerUtilities.ProgramTable
 import qualified CompilerUtilities.IntermediateProgram as IR
-import qualified Frontend.SyntacticAnalysis.Parser as P
 import Frontend.AbstractSyntaxTree
 import Data.List.NonEmpty as NE (NonEmpty((:|)), (<|), fromList, toList, map)
 import qualified Data.List.NonEmpty as NE
-import Data.Foldable (foldlM)
 import Frontend.Error.CompilerError
+import Frontend.Error.NameResolutionError
 
-resolveNames :: (Program, TableState) -> Either [CompilerError] (Program, TableState)
-resolveNames (p, t) = case parse program (intState p t) of
-    Right (resultProgram, (_, _, t)) -> Right (resultProgram, t)
-    Left a -> error "Initialization failed."
+type NameResolver a = ExceptT CompilerError (State ResolverState) a
 
-program :: NameResolver Program  
-program = Program <$> many programElement
+resolveNames :: ProgramState -> Either [CompilerError] ProgramState
+resolveNames (p, t) = case runState (runExceptT program) (initState p t) of
+    (Right p, (_, _, t)) -> Right (p, t)
+    (Left errors, s) -> Left [errors]
 
-programElement :: NameResolver ProgramElement
-programElement = do
-    elem <- next
+program :: NameResolver Program
+program = do
+    (Program pes, _, _) <- get
+    Program <$> mapM programElement pes
+
+programElement :: ProgramElement -> NameResolver ProgramElement
+programElement elem = do
     case elem of
         Ty t -> _type t
         Proc {} -> procedure elem
@@ -240,12 +245,13 @@ checkLocals e lambdaId = case e of
     Lit _ -> pure ()
     Lambda _ -> pure ()   -- Lambda expressions will be checked on their own turn.
     Ident name -> do
-        (_, _, (_, table)) <- getState
-        let symbol = lookupTableEntry (symId name) table
-        maybe (error $ "Unresolved symbol: " ++ show name) checkLocalDefine symbol
+        table <- getTable
+        case lookupTableEntry (symId name) table of
+            Just symbol -> checkLocalDefine symbol
+            Nothing -> throwCompilerError (UndefinedSymbol name) (symMeta name)
 
     where
-    checkLocalDefine (EntryVar _ _ (Scope varParentId) _) = when (lambdaId /= varParentId) $ error "Functions cannot refer to outside variables."
+    checkLocalDefine (EntryVar var _ (Scope varParentId) _) = when (lambdaId /= varParentId) $ throwCompilerError (InvalidStateCapture var) (symMeta var)
     checkLocalDefine _ = pure ()
 
     caseCheck (e1, e2) = checkLocals e1 lambdaId >> checkLocals e2 lambdaId
@@ -292,29 +298,24 @@ typeExpression (TArrow l r) = do
 
 typeExpression (TProd ls) = TProd <$> mapM typeExpression ls
 
-next :: NameResolver ProgramElement
-next = P $ \(Program elements, s, t) -> case elements of
-    x:xs -> Right (x, (Program xs, s, t))
-    [] -> Left (Program [], s, t)
-
 -- Symbol Resolution
 
 resolveName name = do
     resolvedName <- resolve name False
     case resolvedName of
         Just (Symb (ResolvedName id n) m) -> pure $ Symb (ResolvedName id n) m
-        Nothing -> error $ "Unresolved symbol: " ++ show name
+        Nothing -> throwCompilerError (UndefinedSymbol name) (symMeta name)
 
 resolveTypeName name = do
     resolvedName <- resolve name True
     case resolvedName of
         Just (Symb (ResolvedName id n) m) -> pure $ Symb (ResolvedName id n) m
-        Nothing -> error $ "Unresolved symbol: " ++ show name
+        Nothing -> throwCompilerError (UndefinedSymbol name) (symMeta name)
 
 resolve :: Symbol -> Bool -> NameResolver (Maybe Symbol)
 resolve (Symb (ResolvedName id absName) m) _ = pure $ Just $ Symb (ResolvedName id absName) m
 resolve (Symb (IDENTIFIER name) m) isType = do
-    (_, (_, absName, symbolStack), (_, table)) <- getState
+    (_, (_, absName, symbolStack), (_, table)) <- get
     resolve' name absName absName table symbolStack
 
     where
@@ -330,17 +331,17 @@ resolve (Symb (IDENTIFIER name) m) isType = do
                 if isType
                     then pure $ Just $ Symb (ResolvedName id (makeAbs name scopeTrace)) m
                     else checkType entry id name scopeTrace
-            else error $ "Use before definition: " ++ name ++ " " ++ show (head symbolStack) ++ " " ++ show (M.lookup id (head symbolStack)) ++ " " ++ show m
+            else throwCompilerError (UseBeforeDefinition (Symb (ResolvedName id (makeAbs name scopeTrace)) m)) m
 
         findInParentScope = maybe (pure Nothing) (\absName -> resolve' name absName originalTrace table symbolStack) (dequalifyName scopeTrace)
 
     -- Are we looking for a data constructor and found a type constructor with the same name?
     checkType (EntryTCons _ _ _ (Just (True, _, _))) id name absName = resolve (Symb (IDENTIFIER $ name ++ "_C") m) False
-    checkType _                                  id name absName = pure $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
+    checkType _                                      id name absName = pure $ Just $ Symb (ResolvedName id (makeAbs name absName)) m
 
     isDefined :: (ID, TableEntry) -> AbsoluteName -> SymbolStack -> Bool
     isDefined _ ("Global" :| []) _ = True   -- The symbol being resolved resides in global scope, hence not local.
-    isDefined (id, entry) scopeTrace (top:_) = fromList (getAbs entry) /= scopeTrace || isJust (M.lookup id top)
+    isDefined (id, entry) scopeTrace (top:_) = fromList (getAbs entry) /= scopeTrace || S.member id top
 
         where
         getAbs entry = case entry of
@@ -355,17 +356,15 @@ resolve (Symb (IDENTIFIER name) m) isType = do
     dequalifyName (_ :| trace) = Just $ fromList trace
 
 -- | Pushes scope into scope stack.
-startScope :: Symbol -> NameResolver ()
 startScope name = do
     push name
     startLocals
 
 -- | Update current ScopeState to parent scope of caller, and adds definition to table entry.
-endScope :: ProgramElement -> NameResolver ()
 endScope elem = do
-    s <- getState
+    s <- get
     let (inp, (Scope scopeId, n :| ns, symbolStack), table) = s
-    setState (inp, (Scope scopeId, fromList ns, symbolStack), table)
+    put (inp, (Scope scopeId, fromList ns, symbolStack), table)
     updateScopeId
     scope <- getScope
     updateEntry scopeId $ getEntry elem scope (n :| ns)
@@ -381,16 +380,16 @@ startScopeLambda name = do
 
 -- | Update current ScopeState to parent scope of caller. Only to be used for lambda expressions since they have a special entry.
 endScopeLambda name params = do
-    s <- getState
+    s <- get
     let (inp, (Scope scopeId, n :| ns, symbolStack), table) = s
-    setState (inp, (Scope scopeId, fromList ns, symbolStack), table)
+    put (inp, (Scope scopeId, fromList ns, symbolStack), table)
     updateScopeId
     scope <- getScope
     updateEntry scopeId (EntryLambda name (n:|ns) scope (getParamIds params) Nothing)
     endLocals
 
 updateScopeId = do
-    s <- getState
+    s <- get
     let (inp, (Scope scopeId, ns, symbolStack), (nextId, table)) = s
     let parentScope = case lookupTableEntry scopeId table of
             Just (EntryProc _ _ parentScope _) -> parentScope
@@ -398,7 +397,7 @@ updateScopeId = do
             Just (EntryTCons _ _ parentScope _) -> parentScope
             Just (EntryVar _ _ parentScope _) -> parentScope
             Nothing -> Global
-    setState (inp, (parentScope, ns, symbolStack), (nextId, table))
+    put (inp, (parentScope, ns, symbolStack), (nextId, table))
 
 defineTypeEntry (Symb (ResolvedName typeId absName) m) sameNameCons consIds details = do
     scope <- getScope
@@ -408,37 +407,51 @@ defineRecordTypeEntry (Symb (ResolvedName typeId absName) m) sameNameCons consId
     scope <- getScope
     updateEntry typeId $ EntryTCons (Symb (ResolvedName typeId absName) m) absName scope $ Just (sameNameCons, RecType consId memberIds, Just details)
 
+push :: Symbol -> NameResolver ()
 push (Symb (ResolvedName id (name:|_)) _) = do
-    (inp, (scopeId, ns, symbolStack), table) <- getState
+    (inp, (scopeId, ns, symbolStack), table) <- get
     let absName = name <| ns
-    setState (inp, (Scope id, absName, symbolStack), table)
+    put (inp, (Scope id, absName, symbolStack), table)
 
-getScope = (\(_, (scope, _, _), _) -> scope) <$> getState
+getScope = (\(_, (scope, _, _), _) -> scope) <$> get
 
 defineValCons (Symb (ResolvedName consId absName) m) index typeId paramIds = do
     scope <- getScope
     updateEntry consId $ EntryValCons (Symb (ResolvedName consId absName) m) absName scope $ Just (index, typeId, paramIds)
 
-startLocals = P $ \(inp, (scopeId, absName, xs), table) -> Right ((), (inp, (scopeId, absName, M.empty:xs), table))
+-- startLocals = P $ \(inp, (scopeId, absName, xs), table) -> Right ((), (inp, (scopeId, absName, M.empty:xs), table))
+startLocals = do
+    (inp, (scopeId, absName, xs), table) <- get
+    put (inp, (scopeId, absName, S.empty:xs), table)
 
--- | Duplicates the top locals and pushes the copy.
-startLocalsUnionTop = P $ \(inp, (scopeId, absName, x:xs), table) -> Right ((), (inp, (scopeId, absName, x:(x:xs)), table))
+-- | Duplicate the top locals and pushe the copy.
+startLocalsUnionTop = do
+    (inp, (scopeId, absName, symStack), table) <- get
+    let x:xs = symStack
+    put (inp, (scopeId, absName, x:(x:xs)), table)
 
-endLocals = P $ \(inp, (scopeId, absName, x:xs), table) -> Right ((), (inp, (scopeId, absName, xs), table))
+endLocals = do
+    (inp, (scopeId, absName, symStack), table) <- get
+    let x:xs = symStack
+    put (inp, (scopeId, absName, xs), table)
 
 -- | Define in top local symbols table.
-defineLocal id = P $ \(inp, (scopeId, absName, x:xs), table) -> Right ((), (inp, (scopeId, absName, f id x:xs), table))
-    where f id = M.insert id True
+defineLocal :: ID -> NameResolver ()
+defineLocal id = do
+    (inp, (scopeId, absName, symStack), table) <- get
+    let x:xs = symStack
+    put (inp, (scopeId, absName, S.insert id x:xs), table)
 
 -- | Update a variable's type expression to have resolved symbols.
 updateVarType name varType = do
     scope <- getScope
     updateEntry (symId name) $ EntryVar name (symTrace name) scope (Just varType)
 
+updateEntry :: ID -> TableEntry -> NameResolver ()
 updateEntry id newEntry = do
-    (inp, scope, (nid, table)) <- getState
+    (inp, scope, (nid, table)) <- get
     table <- maybe (error "Bug") pure (updateTableEntry id newEntry table)
-    setState (inp, scope, (nid, table))
+    put (inp, scope, (nid, table))
 
 getParamIds = fmap paramId
 
@@ -446,16 +459,15 @@ getBoundParamIds = getSIds $ \(Param s _, _) -> s
 
 getSIds f = fmap $ \x -> symId $ f x
 
-getTable = getState >>= \(_, _, (_, t)) -> pure t
+getTable = get >>= \(_, _, (_, t)) -> pure t
 
-type DefinedSymbols = M.Map ID Bool
+type DefinedSymbols = Set ID
 type SymbolStack = [DefinedSymbols]
 type ScopeState = (Scope, AbsoluteName, SymbolStack)
-type State = (Program, ScopeState, TableState)
-type NameResolver a = AbsParser State a
+type ResolverState = (Program, ScopeState, TableState)
 
-intState :: Program -> TableState -> State
-intState p t = (p, (Global, "Global" :| [], []), t)
+initState :: Program -> TableState -> ResolverState
+initState p t = (p, (Global, "Global" :| [], []), t)
 
 getConsMaps :: Table -> Int -> [ValueCons] -> [M.Map Int Int]
 getConsMaps table tagSize = Prelude.map consMap
@@ -474,3 +486,6 @@ consSize table (ValCons s params) = g $ Prelude.map snd params
 
 typeExprSize table t = case t of
     TCons s -> fromMaybe 8 $ primitiveType table s
+
+throwCompilerError :: NameResolutionError -> Metadata -> NameResolver a
+throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit $ NUMBER 1):|[])) m (NameResolutionError error)

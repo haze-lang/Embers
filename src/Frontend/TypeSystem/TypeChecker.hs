@@ -26,7 +26,6 @@ where
 import Control.Monad.Except
 import Data.List.NonEmpty (NonEmpty((:|)), fromList, toList)
 import qualified Data.List.NonEmpty as NE
-import Control.Monad (unless)
 import Control.Monad.State
 import Data.Maybe (fromJust)
 import Frontend.Error.CompilerError
@@ -37,7 +36,6 @@ import qualified Data.Map.Strict as M
 import CompilerUtilities.ProgramTable
 import Frontend.TypeSystem.Inference.ConstraintGenerator
 import Frontend.TypeSystem.Inference.Unifier
-import CompilerUtilities.SourcePrinter
 
 type TypeChecker a = ExceptT CompilerError (State TypeCheckerState) a
 
@@ -301,7 +299,7 @@ getTable = get >>= \(_, (_, table), _) -> pure table
 
 getTableState = get >>= \(_, (id, table), _) -> pure (id, table)
 
-throwCompilerError :: TypeError -> Metadata -> TypeChecker ()
+throwCompilerError :: TypeError -> Metadata -> TypeChecker a
 throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit $ NUMBER 1):|[])) m (TypeError error)
 
 addError :: TypeError -> Metadata -> TypeChecker ()

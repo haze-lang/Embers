@@ -193,6 +193,8 @@ paramId (Param s _) = symId s
 
 paramSym (Param s _) = s
 
+paramMeta = symMeta . paramSym
+
 symToParam s = Param s ByVal
 
 getSym name = Symb (IDENTIFIER name) (Meta 0 0 "")

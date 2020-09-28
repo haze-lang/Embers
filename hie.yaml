@@ -1,0 +1,19 @@
+cradle:
+  stack:
+    - path: "./src"
+      component: "Embers:lib"
+
+    - path: "./app/Main.hs"
+      component: "Embers:exe:Embers"
+
+    - path: "./app/Args.hs"
+      component: "Embers:exe:Embers"
+
+    - path: "./app/DebugUtil.hs"
+      component: "Embers:exe:Embers"
+
+    - path: "./app/Paths_Embers.hs"
+      component: "Embers:exe:Embers"
+
+    - path: "./test"
+      component: "Embers:test:Embers-test"

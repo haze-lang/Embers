@@ -17,20 +17,22 @@ You should have received a copy of the GNU General Public License
 along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
-module Frontend.Error.ParseError where
+module Frontend.Error.NameResolutionError where
 
 import Frontend.AbstractSyntaxTree
 import Data.List.NonEmpty
 import qualified CompilerUtilities.IntermediateProgram as IR
 import CompilerUtilities.SourcePrinter
 
-data ParseError
-    = TerminatorExpected
-    | MismatchingSignatureNames Symbol Symbol
+data NameResolutionError
+    = UndefinedSymbol Symbol
+    | UseBeforeDefinition Symbol
+    | InvalidStateCapture Symbol
 
-instance Show ParseError where
+instance Show NameResolutionError where
     show e = msg ++ "."
         where
         msg = case e of
-            TerminatorExpected -> "Expected a terminator"
-            MismatchingSignatureNames name1 name2 -> "Type Signature and definition have mismatching names: " ++ symStr name1 ++ ", " ++ symStr name2
+            UndefinedSymbol s -> "Undefined symbol: " ++ symStr s
+            UseBeforeDefinition s -> "Recursive definition not allowed: " ++ symStr s
+            InvalidStateCapture s -> "Pure lambda expressions cannot capture state: " ++ symStr s 
