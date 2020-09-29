@@ -24,7 +24,7 @@ import Frontend.Error.ParseError
 import Frontend.Error.NameResolutionError
 import Frontend.Error.TypeError
 
-data CompilerError = Error ProgramElement Metadata ErrorPhase | LexicalError LexicalError Metadata | MiscError
+data CompilerError = Error ProgramElement Metadata ErrorPhase | LexicalError LexicalError Metadata | CombinatorFailure
 
 data ErrorPhase = ParseError ParseError | NameResolutionError NameResolutionError | TypeError TypeError
 
@@ -34,7 +34,7 @@ data MutationError = ParameterAssigned Parameter | ImmutableAssigned Symbol
 data LexicalError = UnsupportedCharacter Char | UnterminatedStringLiteral | FloatLiteral | UnterminatedCharLiteral
 
 instance Show CompilerError where
-    show MiscError = "Empty error"
+    show CombinatorFailure = "Empty error"
 
     show (LexicalError error m) = printMeta m ++ " Lexical Error: " ++ show error
 
@@ -59,11 +59,11 @@ instance Show LexicalError where
         UnterminatedCharLiteral -> "Missing '"
 
 instance Semigroup CompilerError where
-    MiscError <> e@(Error {}) = e
-    MiscError <> e@(LexicalError {}) = e
-    MiscError <> MiscError = MiscError
-    a <> MiscError = MiscError <> a
+    CombinatorFailure <> e@(Error {}) = e
+    CombinatorFailure <> e@(LexicalError {}) = e
+    CombinatorFailure <> CombinatorFailure = CombinatorFailure
+    a <> CombinatorFailure = CombinatorFailure <> a
     a <> b = error $ "<SEMIGROUP>\n" ++ show a ++ "\n" ++ show b
 
 instance Monoid CompilerError where
-    mempty = MiscError
+    mempty = CombinatorFailure

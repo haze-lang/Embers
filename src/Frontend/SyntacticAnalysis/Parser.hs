@@ -24,7 +24,7 @@ module Frontend.SyntacticAnalysis.Parser
 )
 where
 
-import Control.Applicative
+import Control.Applicative (Alternative(empty))
 import Control.Monad.Except
 import Control.Monad.Identity
 import Control.Monad.State
@@ -40,6 +40,8 @@ import Frontend.Error.ParseError
 import Frontend.Error.NameResolutionError
 import Frontend.LexicalAnalysis.Token
 
+import CompilerUtilities.SourcePrinter
+
 type Parser a = StateT ParserState (Except CompilerError) a
 
 {-
@@ -49,7 +51,8 @@ type Parser a = StateT ParserState (Except CompilerError) a
 
     StateT s (ExceptT e Maybe) a
 
-    is required inside StateT since Except acts as Either and Monoid instance of CompilerError takes care of creating values out of thin air (The Misc constructor).
+    is required inside StateT since Except acts as Either and Monoid instance of CompilerError takes care of
+    creating values out of thin air (CombinatorFailure).
  -}
 
 runParser p s = runExceptT (runStateT p s)
@@ -123,7 +126,7 @@ arrowInstance = procedure <|> function
 procedure :: Parser ProgramElement
 procedure = do
     (TypeSig nameTypeSig procType, typeVars) <- typeSig
-    token $ WHITESPACE Newline
+    token (WHITESPACE Newline) <|> throwCompilerError TerminatorExpected (symMeta nameTypeSig)
     name <- procIdent
     validateNames name nameTypeSig
     name <- beginScope name Procedure
@@ -160,7 +163,7 @@ assignment = do
 function :: Parser ProgramElement
 function = do
     (TypeSig nameTypeSig funcType, typeVars) <- typeSig
-    token $ WHITESPACE Newline
+    token (WHITESPACE Newline) <|> throwCompilerError TerminatorExpected (symMeta nameTypeSig)
     name <- funcIdent
     validateNames name nameTypeSig
     name <- beginScope name Function
@@ -566,7 +569,8 @@ resolveName name = do
     resolvedName <- resolve name
     case resolvedName of
         Just (Symb (ResolvedName id n) m) -> pure $ Symb (ResolvedName id n) m
-        Nothing -> throwCompilerError (NameResolutionError $ UndefinedSymbol name) (symMeta name)
+        Nothing -> empty
+        -- Nothing -> throwCompilerError (NameResolutionError $ UndefinedSymbol name) (symMeta name)
 
 resolve :: Symbol -> Parser (Maybe Symbol)
 resolve (Symb (IDENTIFIER name) m) = do
@@ -677,8 +681,8 @@ insertEntry entry = do
             pure id
         Nothing -> empty
 
-throwCompilerError :: ErrorPhase -> Metadata -> Parser a
-throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit $ NUMBER 1):|[])) m error
+throwCompilerError :: ParseError -> Metadata -> Parser a
+throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit $ NUMBER 1):|[])) m (ParseError error)
 
 addError :: ParseError -> Metadata -> Parser ()
 addError parseError m =
@@ -696,3 +700,26 @@ type ParserState = ([Token], ScopeState, GenState, TableState, ErrorState)
 
 initParserState :: [Token] -> TableState -> ParserState
 initParserState tokens t = (tokens, (Global, "Global" :| []), (0, 0), t, [])
+
+-- | Redifinition of 'Control.Applicative.<|>' to propogate errors.
+infixl 3 <|>
+(<|>) :: Parser a -> Parser a -> Parser a
+a <|> b = a `catchError` handler
+    where
+    handler e = case e of
+        CombinatorFailure -> b
+        a -> throwError a
+
+-- Source for 'some' and 'many' copied from base-4.6.0.1.
+
+-- | Redifinition of 'Control.Applicative.some' in terms of custom '<|>'.
+some v = some_v
+    where
+    many_v = some_v <|> pure []
+    some_v = (:) <$> v <*> many_v
+
+-- | Redifinition of 'Control.Applicative.many' in terms of custom '<|>'.
+many v = many_v
+    where
+    many_v = some_v <|> pure []
+    some_v = (:) <$> v <*> many_v
