@@ -24,14 +24,26 @@ import Frontend.Error.ParseError
 import Frontend.Error.NameResolutionError
 import Frontend.Error.TypeError
 
-data CompilerError = Error ProgramElement Metadata ErrorPhase | LexicalError LexicalError Metadata | CombinatorFailure
+data CompilerError
+    = Error ProgramElement Metadata ErrorPhase
+    | LexicalError LexicalError Metadata
+    | CombinatorFailure
 
-data ErrorPhase = ParseError ParseError | NameResolutionError NameResolutionError | TypeError TypeError
+data ErrorPhase
+    = ParseError ParseError
+    | NameResolutionError NameResolutionError
+    | TypeError TypeError
 
-data MutationError = ParameterAssigned Parameter | ImmutableAssigned Symbol
+data MutationError
+    = ParameterAssigned Parameter
+    | ImmutableAssigned Symbol
     deriving Show
 
-data LexicalError = UnsupportedCharacter Char | UnterminatedStringLiteral | FloatLiteral | UnterminatedCharLiteral
+data LexicalError
+    = UnsupportedCharacter Char
+    | UnterminatedCharLiteral
+    | UnterminatedStringLiteral
+    | FloatLiteral
 
 instance Show CompilerError where
     show CombinatorFailure = "Empty error"
@@ -57,6 +69,7 @@ instance Show LexicalError where
         UnterminatedStringLiteral -> "Unterminated string literal"
         FloatLiteral -> "Float literals not supported"
         UnterminatedCharLiteral -> "Missing '"
+        ++ "."
 
 instance Semigroup CompilerError where
     CombinatorFailure <> e@(Error {}) = e

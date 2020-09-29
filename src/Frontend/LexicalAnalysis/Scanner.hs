@@ -26,7 +26,9 @@ module Frontend.LexicalAnalysis.Scanner
 )
 where
 
-import CompilerUtilities.AbstractParser
+import Control.Monad.State
+import Control.Monad.Except
+import Control.Monad.Identity
 import Frontend.AbstractSyntaxTree
 import Frontend.LexicalAnalysis.Token
 import Control.Applicative
@@ -35,12 +37,19 @@ import qualified Data.List.NonEmpty as NE
 import qualified Data.Char
 import Frontend.Error.CompilerError
 
+{-
+    *** Important
+    If throwError is to be used, the Alternative functions '<|>', 'some' and 'many' must be redefined for error propagation similar to Parser module.
+-}
+
+type Scanner a = StateT ScannerState (Except CompilerError) a
+
 -- |Scans the given string and returns list of tokens.
 scan :: Filename -> String -> Either [CompilerError] [Token]
-scan filename source = case parse (many root) (initState (filename, source)) of
-    Right (tokens, (Str [] m, [])) -> Right $ concatNE tokens
-    Right (tokens, (Str _ m, e)) -> Left e
-    Left (Str _ m, e) -> Left e
+scan filename source = case runExceptT (runStateT (many root) (initState (filename, source))) of
+    Identity (Right (tokens, (Str [] m, []))) -> Right $ concatNE tokens
+    Identity (Right (tokens, (Str _ m, errors))) -> Left errors
+    Identity (Left err) -> Left [err]
 
     where concatNE = concat . map NE.toList
 
@@ -55,11 +64,11 @@ keywordsIdent = do
         Just t -> pure t
         Nothing -> pure id
 
-getKeyword str = case parse keywords (initState ("", str)) of
-    Right (kword, (Str [] _, [])) -> Just kword
+getKeyword str = case runExceptT (runStateT keywords (initState ("", str))) of
+    Identity (Right (kword, (Str [] _, []))) -> Just kword
     _ -> Nothing
 
-keyword :: String -> TokenType -> Lexer (NonEmpty Token)
+keyword :: String -> TokenType -> Scanner (NonEmpty Token)
 keyword word t = do
     m <- getMeta
     x <- tryString word
@@ -132,7 +141,7 @@ rparen = keyword ")" RPAREN
 lbrace = keyword "{" LBRACE
 rbrace = keyword "}" RBRACE
 
-ident :: Lexer (NonEmpty Token)
+ident :: Scanner (NonEmpty Token)
 ident = do
     m <- getMeta
     x <- alpha
@@ -140,7 +149,7 @@ ident = do
     pure $ NEHead $ T (TkIdent $ IDENTIFIER (x:xs)) m
     <|> identSymbols
 
-identSymbols :: Lexer (NonEmpty Token)
+identSymbols :: Scanner (NonEmpty Token)
 identSymbols = do
     m <- getMeta
     s <- some $ (tryChar '=' >> pure 'e')
@@ -161,14 +170,14 @@ identSymbols = do
     pure $ NEHead $ T (TkSymb $ IDENTIFIER ("_operator_" ++ s)) m
 
 -- Comments ending with file ending are not supported.
-comment :: Lexer (NonEmpty Token)
+comment :: Scanner (NonEmpty Token)
 comment = do
     m <- getMeta
     tryString "//" <|> tryString "--"
     many (sat Data.Char.isPrint)
-    line                            -- Generate a newline token instead of comment for cases where terminator is required.
+    line                            -- Comments may be used as terminators.
 
-numberLit :: Lexer (NonEmpty Token)
+numberLit :: Scanner (NonEmpty Token)
 numberLit = do
     m <- getMeta
     tryChar '-'
@@ -179,7 +188,7 @@ numberLit = do
     n <- some digit
     pure $ NEHead $ T (TkLit $ NUMBER (read n)) m
 
-charLit :: Lexer (NonEmpty Token)
+charLit :: Scanner (NonEmpty Token)
 charLit = do
     m <- getMeta
     tryChar '\''
@@ -189,7 +198,7 @@ charLit = do
         pure $ NEHead $ T (TkLit $ CHAR c) m
         <|> failToken UnterminatedCharLiteral m
 
-stringLit :: Lexer (NonEmpty Token)
+stringLit :: Scanner (NonEmpty Token)
 stringLit = do
     m <- getMeta
     tryChar '"'
@@ -199,50 +208,53 @@ stringLit = do
         pure $ resolveStrLiteral x m
         <|> failToken UnterminatedStringLiteral m
 
-unitLit :: Lexer (NonEmpty Token)
+unitLit :: Scanner (NonEmpty Token)
 unitLit = do
     m <- getMeta
     tryChar '('
     tryChar ')'
     pure $ NEHead $ T (TkIdent (IDENTIFIER "Unit")) m
 
-semicolon :: Lexer (NonEmpty Token)
+semicolon :: Scanner (NonEmpty Token)
 semicolon = do
     m <- getMeta
     tryChar ';'
     pure $ NEHead $ T SEMICOLON m
 
-space :: Lexer (NonEmpty Token)
+space :: Scanner (NonEmpty Token)
 space = do
     m <- getMeta
     ws <- whitespace
     pure $ NEHead $ T (WHITESPACE Space) m
 
-tab :: Lexer (NonEmpty Token)
+tab :: Scanner (NonEmpty Token)
 tab = do
     m <- getMeta
     t <- horizontaltab
     pure $ NEHead $ T (WHITESPACE Tab) m
 
-line :: Lexer (NonEmpty Token)
+line :: Scanner (NonEmpty Token)
 line = do
     m <- getMeta
     nl <- newline
     pure $ NEHead $ T (WHITESPACE Newline) m
 
-failToken :: LexicalError -> Metadata -> Lexer (NonEmpty Token)
-failToken error m = P $ \(src, err) -> Right (NEHead $ T (Invalid (show error)) m, (src, err ++ [LexicalError error m]))
+failToken :: LexicalError -> Metadata -> Scanner (NonEmpty Token)
+failToken error m = do
+    modify $ \(src, err) -> (src, err ++ [LexicalError error m])
+    pure $ NEHead $ T (Invalid (show error)) m
 
-type LexerState = (StrSource, [CompilerError])
-type Lexer a = AbsParser LexerState a
+type ScannerState = (StrSource, [CompilerError])
 
-initState :: (Filename, String) -> LexerState
+initState :: (Filename, String) -> ScannerState
 initState (filename, source) = (Str source (Meta 1 1 filename), [])
 
 -- State Manipulation
 
-getMeta :: Lexer Metadata
-getMeta = P $ \(Str str m, err) -> Right (m, (Str str m, err))
+getMeta :: Scanner Metadata
+getMeta = do
+    Str str m <- gets fst
+    pure m
 
 isSpaceToken (T (WHITESPACE Space) _) = True
 isSpaceToken _ = False
@@ -250,54 +262,59 @@ isSpaceToken _ = False
 isCommentToken (T COMMENT _) = True
 isCommentToken _ = False
 
-item :: Lexer Char
-item = P $ \inp -> case inp of
-    (Str [] m, err) -> Left inp
-    (Str (x:xs) m, err) -> case x of
-        '\r' -> case xs of
-            ('\n':bs) -> Right (x, (Str bs (incLine m), err))
-            _ -> Right (x, (Str xs (incLine m), err))
-        '\n' -> Right (x, (Str xs (incLine m), err))
-        _ -> Right (x, (Str xs (incCol m), err))
+item :: Scanner Char
+item = do
+    (Str inp m, err) <- get
+    case inp of
+        [] -> empty
+        x:xs -> do
+            let newState = case x of
+                    '\r' -> case xs of
+                        ('\n':bs) -> Str bs (incLine m)
+                        _ -> Str xs (incLine m)
+                    '\n' -> Str xs (incLine m)
+                    _ -> Str xs (incCol m)
+            put (newState, err)
+            pure x
 
 -- Helpers
 
-sat :: (Char -> Bool) -> Lexer Char
+sat :: (Char -> Bool) -> Scanner Char
 sat p = do
     x <- item
     if p x
-    then pure x
-    else empty
+        then pure x
+        else empty
 
-tryChar :: Char -> Lexer Char
+tryChar :: Char -> Scanner Char
 tryChar x = sat (== x)
 
-whitespace :: Lexer Char
+whitespace :: Scanner Char
 whitespace = tryChar ' '
 
-horizontaltab :: Lexer Char
+horizontaltab :: Scanner Char
 horizontaltab = tryChar '\t'
 
-newline :: Lexer Char
+newline :: Scanner Char
 newline = tryChar '\r' <|> tryChar '\n'
 
-alphanum :: Lexer Char
+alphanum :: Scanner Char
 alphanum = sat Data.Char.isAlphaNum
 
-alphanumSpace :: Lexer Char
+alphanumSpace :: Scanner Char
 alphanumSpace = alphanum <|> whitespace <|> horizontaltab
 
-tryString :: String -> Lexer String
+tryString :: String -> Scanner String
 tryString [] = pure ""
 tryString (x:xs) = do
     tryChar x
     tryString xs
     pure $ x:xs
 
-alpha :: Lexer Char
+alpha :: Scanner Char
 alpha = sat Data.Char.isAlpha
 
-digit :: Lexer Char
+digit :: Scanner Char
 digit = sat Data.Char.isDigit
 
 resolveStrLiteral s m = T LPAREN m :| g s ++ [T RPAREN m]
