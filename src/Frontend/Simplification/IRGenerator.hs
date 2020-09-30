@@ -211,7 +211,7 @@ expression e = case e of
 
     Ident s -> pure (Ref $ S s, [])
 
-    Lit l -> pure (Literal l, [])
+    Lit l _ -> pure (Literal l, [])
 
     _ -> pure (Ref $ V $ Temp (-1), [])
 

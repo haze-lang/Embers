@@ -153,7 +153,7 @@ statement (Assignment l r) = do
 statement (StmtExpr e) = StmtExpr <$> expression e
 
 expression :: Expression -> NameResolver Expression
-expression (Lit lit) = pure $ Lit lit
+expression lit@(Lit {}) = pure lit
 expression (Ident s) = do
     resolved <- resolveName s
     t <- getTable
@@ -185,7 +185,7 @@ expression (Switch e cases def) = do
         pure (p, e)
 
     _pattern p = case p of
-        Lit _ -> expression p
+        Lit {} -> expression p
         Ident s -> expression p
         Tuple es -> defineLocals es >> expression p
         App cons args -> case args of
@@ -242,7 +242,7 @@ checkLocals e lambdaId = case e of
     Tuple (x:|xs) -> checkLocals x lambdaId >> checkLocals (Tuple $ fromList xs) lambdaId
     Conditional e1 e2 e3 -> checkLocals e1 lambdaId >> checkLocals e2 lambdaId >> checkLocals e3 lambdaId
     App l r -> checkLocals l lambdaId >> checkLocals r lambdaId
-    Lit _ -> pure ()
+    Lit {} -> pure ()
     Lambda _ -> pure ()   -- Lambda expressions will be checked on their own turn.
     Ident name -> do
         table <- getTable
@@ -488,4 +488,4 @@ typeExprSize table t = case t of
     TCons s -> fromMaybe 8 $ primitiveType table s
 
 throwCompilerError :: NameResolutionError -> Metadata -> NameResolver a
-throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit $ NUMBER 1):|[])) m (NameResolutionError error)
+throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit (NUMBER 1) m):|[])) m (NameResolutionError error)

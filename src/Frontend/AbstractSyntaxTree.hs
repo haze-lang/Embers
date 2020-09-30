@@ -75,7 +75,7 @@ data Expression
     | Lambda LambdaExpression
     | Tuple (NonEmpty Expression)
     | Ident Symbol
-    | Lit Literal
+    | Lit Literal Metadata
     deriving (Show, Eq)
 
 data AccessMode
@@ -126,7 +126,7 @@ extractExprMeta e = case e of
     Lambda (FuncLambda name _ _) -> symMeta name
     Tuple (e:|es) -> extractExprMeta e
     Ident s -> symMeta s
-    _ -> Meta 0 0 "??"
+    Lit _ m -> m
 
 printMeta (Meta c l "") = show l ++ ":" ++ show c
 printMeta (Meta c l f) = f ++ ":" ++ show l ++ ":" ++ show c ++ ":"

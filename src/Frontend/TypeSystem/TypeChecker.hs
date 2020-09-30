@@ -98,7 +98,7 @@ statementType (Assignment var r) = do
 
 statementType (StmtExpr e) = Just <$> expressionType e
 
-expressionType (Lit l) = case l of
+expressionType (Lit l _) = case l of
     NUMBER _ -> f intId
     CHAR _ -> f charId
 
@@ -142,7 +142,7 @@ expressionType (Switch e cases def) = do
 
         where
         assignType p = case p of
-            Lit _ -> pure ()
+            Lit {} -> pure ()
             Ident _ -> pure ()
             Tuple es -> assignProd es exprType
             Cons cons arg -> do
@@ -172,19 +172,17 @@ expressionType (Cons cons args) = expressionType (App (Ident cons) (Tuple (NE.fr
 
 expressionType (App l r) = do
     tl <- expressionType l
-    unless (isArrow tl) $ throwCompilerError (NonArrowApplication l tl) (extractExprMeta l)
-    let (TArrow paramType retType) = tl
-    argType <- expressionType r
-    if isPolymorphic tl
-        then polymorphicApp l r tl argType
-        else do
-            assertWithError (ArgumentMismatch paramType argType, extractExprMeta l) argType paramType
-            pure retType
+    case tl of
+        TArrow paramType retType -> do
+            argType <- expressionType r
+            if isPolymorphic tl
+                then polymorphicApp l r tl argType
+                else do
+                    assertWithError (ArgumentMismatch paramType argType, extractExprMeta r) argType paramType
+                    pure retType
+        _ -> throwCompilerError (NonArrowApplication l tl) (extractExprMeta l)
 
     where
-    isArrow TArrow {} = True
-    isArrow _ = False
-
     isPolymorphic te = case te of
         TVar _ -> True
         TCons _ -> False
@@ -300,11 +298,11 @@ getTable = get >>= \(_, (_, table), _) -> pure table
 getTableState = get >>= \(_, (id, table), _) -> pure (id, table)
 
 throwCompilerError :: TypeError -> Metadata -> TypeChecker a
-throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit $ NUMBER 1):|[])) m (TypeError error)
+throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit (NUMBER 1) m):|[])) m (TypeError error)
 
 addError :: TypeError -> Metadata -> TypeChecker ()
 addError err m = do
     (p, t, errors) <- get
-    let pe = Proc [] (TVar $ getSym "") (getSym "SomeProc") ((StmtExpr $ Lit $ NUMBER 1):|[])
+    let pe = Proc [] (TVar $ getSym "") (getSym "SomeProc") ((StmtExpr $ Lit (NUMBER 1) m):|[])
     let error = Error pe m (TypeError err)
     put (p, t, error:errors)

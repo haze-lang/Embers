@@ -37,8 +37,8 @@ prodType (x:|[]) = x
 prodType ps = TProd ps
 
 expression :: Expression -> Infer TypeExpression
-expression (Lit (NUMBER _)) = intType
-expression (Lit (CHAR _)) = charType
+expression (Lit (NUMBER _) _) = intType
+expression (Lit (CHAR _) _) = charType
 
 expression (Cons cons []) = expression (Ident cons)
 expression (Cons cons [arg]) = expression (App (Ident cons) arg)

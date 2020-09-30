@@ -128,7 +128,7 @@ expression e = case e of
 
     where
     extendArgs func args count = case args of
-        Lit _ -> Tuple (args:|f count 1)
+        Lit {} -> Tuple (args:|f count 1)
         Ident _ -> Tuple (args:|f count 1)
         Tuple (e:|es) -> Tuple (e:|es ++ f count 1)
 

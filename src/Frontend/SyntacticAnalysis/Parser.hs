@@ -484,7 +484,7 @@ literal :: Parser Expression
 literal = do
     x <- next
     case x of
-        T (TkLit lit) _ -> pure $ Lit lit
+        T (TkLit lit) m -> pure $ Lit lit m
         _ -> empty
 
 wspace :: Parser Whitespace
@@ -682,11 +682,11 @@ insertEntry entry = do
         Nothing -> empty
 
 throwCompilerError :: ParseError -> Metadata -> Parser a
-throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit $ NUMBER 1):|[])) m (ParseError error)
+throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit (NUMBER 1) m):|[])) m (ParseError error)
 
 addError :: ParseError -> Metadata -> Parser ()
 addError parseError m =
-    let error = Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit $ NUMBER 1):|[])) m (ParseError parseError)
+    let error = Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit (NUMBER 1) m):|[])) m (ParseError parseError)
     in modify (\(inp, s, lambdaNo, (id, table), err) ->
         (inp, s, lambdaNo, (id, table), error:err))
 

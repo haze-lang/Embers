@@ -74,7 +74,7 @@ instance SourcePrinter Expression where
     printSource (Tuple (x:|xs)) =  "(" ++ printSource x ++ f xs ++ ")"
         where f = foldr (\a b -> ", " ++ printSource a ++ b) ""
     printSource (Ident s) = symStr s
-    printSource (Lit l) = printSource l
+    printSource (Lit l _) = printSource l
 
 instance SourcePrinter Symbol where
     printSource (Symb id m) = printSource id ++ " at " ++ printSource m

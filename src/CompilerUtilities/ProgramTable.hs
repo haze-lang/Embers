@@ -229,7 +229,7 @@ nameLookup name table = case M.toList $ M.filter (search name) table of
         EntryTVar _ entryName _ -> entryName == absName
 
 exprType :: Table -> Expression -> TypeExpression
-exprType t (Lit l) = case l of
+exprType t (Lit l _) = case l of
     NUMBER _ -> TCons $ intId t
     CHAR _ -> TCons $ charId t
 
