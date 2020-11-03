@@ -114,7 +114,7 @@ expression e = case e of
     Cons s [] -> do
         table <- getProg
         let (TCons _type) = fromJust $ lookupType (symId s) table
-        (tagSize, size, ctors) <- getTypeDetails _type
+        (_, size, _) <- getTypeDetails _type
         let (EntryValCons _ _ _ (Just (index, _, _))) = fromJust $ M.lookup (symId s) table
         case primitiveType table _type of
             Just _ -> pure (Literal (NUMBER index), [])
@@ -123,34 +123,28 @@ expression e = case e of
                 -- updateSize t QWord
                 pure (Ref $ V t, [Alloc (V t) size, Store (V t) 0 (Literal $ NUMBER index)])
 
-    Cons cons right -> do
+    Cons cons args -> do
         table <- getProg
-        let (pType `TArrow` (TCons retType)) = fromJust $ lookupType (symId cons) table
-        (tagSize, size, ctors) <- getTypeDetails retType
-        let (EntryValCons _ _ _ (Just (index, _, _))) = fromJust $ M.lookup (symId cons) table
+        let (_ `TArrow` (TCons retType)) = fromJust $ lookupType (symId cons) table
+        (_, size, ctors) <- getTypeDetails retType
+        let (EntryValCons _ _ _ (Just (consIndex, _, _))) = fromJust $ M.lookup (symId cons) table
         t <- freshTemp
         -- updateSize t QWord
-        (r, alloc) <- case right of
-            [e] -> do
-                let ctor = ctors !! index
-                let offset = fromJust $ M.lookup 0 ctor     -- 0 is used for obtaining offset of Tag.
-                (v, ins) <- expression e
-                pure (Ref $ V t, ins ++ [Store (V t) offset v])
+        case args of
+            [arg] -> do
+                (argResult, ins) <- expression arg
+                let consFieldOffsets = ctors !! consIndex
+                let (Just offset) = M.lookup 0 consFieldOffsets     -- 0 is used for getting offset of first field (since cons takes only one argument) where the argument is to be stored.
+                pure $ (Ref $ V t, [Alloc (V t) (size), Store (V t) 0 (Literal $ NUMBER consIndex)] ++ ins ++ [Store (V t) offset argResult])
 
-            es -> do
-                (vars', exprs) <- unzip <$> mapM expression es
-                vars'' <- mapM resultVar vars'
-                let (vars, es) = unzip vars''
-                let ctor = ctors !! index
+            _ -> do
+                let ctor = ctors !! consIndex
                 let offsets = map (\index -> fromJust $ M.lookup index ctor) [0..]
-                let fla = concat es
-                let exprVarIndex = zip4 exprs vars [0..] offsets
-                xx <- pure $ concatMap (storeExpr t) exprVarIndex
-                pure (Ref $ V $ Temp (-100), fla++xx)
-        pure $ (Ref $ V t, [Alloc (V t) (size), Store (V t) 0 (Literal $ NUMBER index)] ++ alloc)
+                let indexedExpressions = zip args [0..]
+                instructions <- concat <$> mapM (expressionBaseVar t offsets) indexedExpressions
+                pure (Ref $ V $ t, Alloc (V t) size : Store (V t) 0 (Literal $ NUMBER consIndex) : instructions)
 
     App left right -> do
-        table <- getProg
         (callee, loadIns) <- case left of
             Ident s -> pure (S s, [])
             _ -> do
@@ -172,30 +166,30 @@ expression e = case e of
     Access expr Tag -> do
         (r, e) <- expression expr
         t <- freshTemp
-        table <- getProg
-        let (TCons cons) = exprType table expr
-        (tagSize, _, _) <- getTypeDetails cons
+        -- table <- getProg
+        -- let (TCons cons) = exprType table expr
+        -- (tagSize, _, _) <- getTypeDetails cons
         -- updateSize t tagSize
         pure (Ref $ V t, e ++ [Load (V t) r 0])
 
     Access expr member -> do
         table <- getProg
-        (v, e) <- expression expr
-        (v, e2) <- resultVar v
+        (result, instructions) <- expression expr
         t <- freshTemp
-        index <- case member of
+        storeOffset <- case member of
             Member index -> do
-                let eType@(TProd es) = exprType table expr
-                z <- typeSize (es NE.!! index)
+                let eType = exprType table expr
+                -- z <- typeSize (es NE.!! index)
                 -- updateSize v z
-                (size, offsets) <- tupleStructureType eType
+                (_, offsets) <- tupleStructureType eType
                 pure $ offsets !! index
 
             ConsMember consIndex index -> do
-                let eType@(TCons cons) = exprType table expr
+                let (TCons cons) = exprType table expr
                 (_, _, ctors) <- getTypeDetails cons
                 pure $ fromJust $ M.lookup index $ ctors !! consIndex
-        pure (Ref $ V $ Temp (-200), e ++ [Load (V t) (Ref $ v) index])
+
+        pure (Ref $ V $ t, instructions ++ [Load (V t) result storeOffset])
 
     Switch switch cases def -> expression switch
 
@@ -203,20 +197,21 @@ expression e = case e of
         (size, offsets) <- tupleStructure e
         t <- freshTemp
         -- updateSize t QWord
-        (vars', exprs) <- NE.unzip <$> mapM expression es
-        (vars, ins') <- NE.unzip <$> mapM resultVar vars'
-        let exprVarIndexOffset = zip4 (NE.toList exprs) (NE.toList vars) [0..] offsets
-        let ins = concat ins' ++ concatMap (storeExpr t) exprVarIndexOffset
-        pure (Ref $ V $ t, Alloc (V t) size : ins)
+        let indexedExpressions = NE.zip es (0:|[1..])
+        instructions <- concat <$> mapM (expressionBaseVar t offsets) indexedExpressions
+        pure (Ref $ V $ t, Alloc (V t) size : instructions)
 
     Ident s -> pure (Ref $ S s, [])
 
     Lit l _ -> pure (Literal l, [])
 
-    _ -> pure (Ref $ V $ Temp (-1), [])
+    -- _ -> pure (Ref $ V $ Temp (-1), [])
 
-storeExpr :: Var -> ([Instruction], Name, c, Int) -> [Instruction]
-storeExpr t (ins, name, index, offset) = ins ++ [Store (V t) offset (Ref name)]
+-- Provided an expression with an index, generates instructions for the expression and stores the UnitExpression result at baseVar + (offsets !! index).
+expressionBaseVar :: Var -> [Int] -> (AST.Expression, Int) -> IRGen [Instruction]
+expressionBaseVar baseVar offsets (e, index) = do
+    (result, exprIns) <- expression e
+    pure $ exprIns ++ [Store (V baseVar) (offsets !! index) result]
 
 typeSize typeExpr = case typeExpr of
     TCons s -> do
@@ -264,14 +259,6 @@ tupleStructureType (TProd es) = do
 
 -- Helpers
 
-resultVar :: UnitExpression -> IRGen (Name, [Instruction])
-resultVar x = case x of
-        Literal l -> freshTemp >>= \t -> pure (V t, [Assign (V t) (Unit x)])
-        Ref (V v) -> pure (V v, [])
-        Ref (S s) -> pure (S s, [])
-        -- Indexed v 0 -> pure (v, [])
-        -- Indexed v n -> error $ "Indexed not supported." ++ show x
-
 getTypeDetails :: Symbol -> IRGen TypeDetails
 getTypeDetails s = do
     t <- getProg
@@ -305,9 +292,3 @@ initState t = initializeState initLocal t
     initLocal :: GenState
     initLocal = (M.empty, 0, 0)
 
-isArrow (AST.Ident s) table = let (Just x) = M.lookup (symId s) table in
-    case x of
-        EntryProc {} -> True
-        EntryFunc {} -> True
-        EntryLambda {} -> True
-        _ -> False
