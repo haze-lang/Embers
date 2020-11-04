@@ -1,25 +1,34 @@
-module Frontend.Simplification.ConstructionResolver
+module Frontend.Simplification.RecursiveExpressionResolver
 (
-    resolveConstructions
+    resolveExpressions
 )
 where
 
 import Control.Monad.State
 import CompilerUtilities.ProgramTable
 import Frontend.AbstractSyntaxTree
-import Data.Map.Strict (Map)
-import Data.Maybe (fromMaybe, fromJust)
-import qualified Data.Map.Strict as M
+    ( mapExpression,
+      mapStatement,
+      Expression(Switch, Cons, Tuple, App, Ident, Lit),
+      Identifier(ResolvedName),
+      Metadata(Meta),
+      Program(..),
+      ProgramElement(Proc),
+      Statement(Assignment),
+      Symbol(..) )
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
 import Frontend.Simplification.Simplifier
 
-type ConstructionResolver a = ProgramSimplifier ResolverState a
+type RecursiveExpressionResolver a = ProgramSimplifier ResolverState a
 
-resolveConstructions p = case runState program (initState p) of
+-- | Simplify nested expressions using generated local variables.
+-- Input must have functions simplified.
+resolveExpressions :: ProgramState -> ProgramState
+resolveExpressions p = case runState program (initState p) of
     (p, ((_, t), _)) -> (p, t)
 
-program :: ConstructionResolver Program
+program :: RecursiveExpressionResolver Program
 program = do
     (Program ps, _) <- gets fst
     Program <$> mapM pe ps
@@ -34,21 +43,34 @@ program = do
         pure (Proc params retType name newBody)
     pe a = pure a
 
-statement stmt@(Assignment s (Cons cons [])) = pure stmt
-statement stmt@(Assignment s (Cons cons args)) = do
+statement stmt@(Assignment _ (Cons _ [])) = pure stmt
+statement (Assignment s (Cons cons args)) = do
     args <- mapM expression args
     pure $ Assignment s (Cons cons args)
 statement s = mapStatement expression s
 
 expression e = case e of
-    Cons cons [] -> do
-        local <- resolveCons e
-        pure $ Ident local
+    Cons _ [] -> pure e
 
     Cons cons args -> do
         args <- mapM expression args
-        local <- resolveCons $ Cons cons args
+        local <- generateAssignment $ Cons cons args
         pure $ Ident local
+
+    App l r -> do
+        l <- expression l
+        case r of
+            Lit {} -> pure $ App l r
+
+            Ident {} -> pure $ App l r
+
+            Tuple es -> do
+                es <- mapM expression es
+                pure $ App l (Tuple es)
+
+            _ -> do
+                local <- generateAssignment r
+                pure $ App l $ Ident local
 
     Switch e cases def -> do
         e <- expression e
@@ -62,7 +84,8 @@ expression e = case e of
 
     a -> mapExpression statement expression a
 
-resolveCons e = do
+generateAssignment :: Expression -> RecursiveExpressionResolver Symbol
+generateAssignment e = do
     local <- freshLocal e
     freshAssignment (local, e)
     pure local

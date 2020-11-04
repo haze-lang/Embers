@@ -17,6 +17,7 @@ import Frontend.Simplification.Simplifier
 type AccessResolver a = ProgramSimplifier ResolverState a
 
 -- | Resolve pattern matches to corresponding member accesses.
+-- Input must have functions, lambdas and nested expressions simplified.
 resolvePatternMatches :: ProgramState -> ProgramState
 resolvePatternMatches p = case runState program (initState p) of
     (p, ((_, t), _)) -> (p, t)
@@ -28,12 +29,9 @@ program = do
 
     where
     pe p@Proc {} = procedure p
-    pe f@Func {} = function f
     pe a = pure a
 
 procedure (Proc params retType name body) = Proc params retType name <$> mapM statement body
-
-function (Func params retType name body) = Func params retType name <$> expression body
 
 statement = mapStatement expression
 
@@ -77,6 +75,7 @@ expression (App l r) = do
             case r of
                 Ident _ -> pure $ App l $ g paramType r
                 Tuple _ -> App l <$> expression r
+                a -> error $ show a
         _ -> App l <$> expression r
 
     where
