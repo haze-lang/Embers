@@ -71,7 +71,7 @@ expression (App l r) = do
     t <- getTable
     let (paramType `TArrow` _) = exprType t l
     case paramType of
-        TProd ps ->
+        TProd {} ->
             case r of
                 Ident _ -> pure $ App l $ g paramType r
                 Tuple _ -> App l <$> expression r
@@ -81,8 +81,8 @@ expression (App l r) = do
     where
     g (TProd ts) (Ident s) = Tuple (NE.fromList $ h 0 (NE.toList ts))
         where
-        h n [] = []
-        h n (t:ts) = Access (Ident s) (Member n) : h (n + 1) ts
+        h _ [] = []
+        h n (_:ts) = Access (Ident s) (Member n) : h (n + 1) ts
 
 expression e@(Ident s) = fromMaybe e <$> lookupAccess s
 expression e = mapExpression statement expression e
@@ -98,7 +98,7 @@ markSequence container es = f 0 $ NE.toList es
 markSequenceCons :: Symbol -> Expression -> [Expression] -> AccessResolver ()
 markSequenceCons cons container es = f 0 es
     where
-    f n [] = pure ()
+    f _ [] = pure ()
     f n (Ident s:xs) = markCons cons container s n >> f (n + 1) xs
 
 mark :: Expression -> Symbol -> Int -> AccessResolver ()
