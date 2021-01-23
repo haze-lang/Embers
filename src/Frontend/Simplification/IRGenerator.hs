@@ -51,9 +51,8 @@ compileIR (Program pes, (_, t)) = case runState (program initProgram) (initState
 program :: [ProgramElement] -> IRGen [Routine]
 program = mapM element
     where
-    element elem = do
-        block <- case elem of
-            Proc {} -> procedure elem
+    element e = do
+        block <- procedure e
         endProc
         pure block
 
@@ -96,7 +95,6 @@ expression e = case e of
         (rElse, eElse) <- expression e2
         temp <- getFreeTemp
 
-        -- temp <- freshTemp
         let thenBlock = Mark thenLabel : eThen ++ assignResult temp rThen ++ [Jump $ L contLabel]
         let elseBlock = Mark elseLabel : eElse ++ assignResult temp rElse ++ [Mark contLabel]
 
@@ -117,7 +115,6 @@ expression e = case e of
         case primitiveType table _type of
             Just _ -> pure (Literal (NUMBER index), [])
             Nothing -> do
-                -- t <- freshTemp
                 t <- getFreeTemp
                 releaseTemp t
                 -- updateSize t QWord
@@ -128,7 +125,6 @@ expression e = case e of
         let (_ `TArrow` (TCons retType)) = fromJust $ lookupType (symId cons) table
         (_, size, ctors) <- getTypeDetails retType
         let (EntryValCons _ _ _ (Just (consIndex, _, _))) = fromJust $ M.lookup (symId cons) table
-        -- t <- freshTemp
         -- updateSize t QWord
         case args of
             [arg] -> do
@@ -149,32 +145,39 @@ expression e = case e of
                 pure (Ref $ V $ t, Alloc (V t) size : Store (V t) 0 (Literal $ NUMBER consIndex) : instructions)
 
     App left right -> do
-        (callee, loadIns) <- case left of
-            Ident s -> pure (S s, [])
+        (callee, loadIns, possibleTemp) <- case left of
+            Ident s -> pure (S s, [], Nothing)
 
             _ -> do
-                (r, e) <- expression left
-                case r of Ref name -> pure (name, e)
+                (r, e, t) <- expressionVar left
+                case r of Ref name -> pure (name, e, t)
 
-        case right of
+        (args, argIns) <- argument right
+
+        case possibleTemp of
+            Just temp -> releaseTemp temp
+            Nothing -> pure ()
+
+        resultTemp <- getFreeTemp
+        releaseTemp resultTemp
+
+        pure (Ref $ V resultTemp, loadIns ++ argIns ++ [Invoke callee args resultTemp])
+
+        where
+        argument arg = case arg of
             Tuple args -> do
-                -- t <- freshTemp
-                (results, exprs) <- NE.unzip <$> mapM expression args
-                t <- getFreeTemp
-                let argExprs = concat (NE.toList exprs)
-                releaseTemp t
-                pure (Ref $ V t, loadIns ++ argExprs ++ [Invoke callee (NE.toList results) t])
+                -- Use expressionVar since we don't want to reuse temporaries betweem instructions of different arguments.
+                (results, ins, freeTemps) <- unzip3 . NE.toList <$> mapM expressionVar args
+                let argIns = concat ins
+                mapM_ releaseTemp (catMaybes freeTemps)
+                pure $ (results, argIns)
 
             _ -> do
-                (v, ins) <- expression right
-                resultTemp <- getFreeTemp
-                -- resultTemp <- freshTemp
-                releaseTemp resultTemp
-                pure (Ref $ V resultTemp, loadIns ++ ins ++ [Invoke callee [v] resultTemp])
+                (result, ins) <- expression right
+                pure ([result], ins)
 
     Access expr Tag -> do
         (r, e) <- expression expr
-        -- t <- freshTemp
         t <- getFreeTemp
         releaseTemp t
         -- table <- getProg
@@ -186,7 +189,6 @@ expression e = case e of
     Access expr member -> do
         table <- getProg
         (result, instructions) <- expression expr
-        -- t <- freshTemp
         t <- getFreeTemp
         releaseTemp t
         storeOffset <- case member of
@@ -208,7 +210,6 @@ expression e = case e of
         (tag, e) <- expression switch
         tag <- pure $ case tag of
             Ref v -> v
-        -- t <- freshTemp
         t <- getFreeTemp
 
         let firstCase = fst $ NE.head cases
@@ -261,7 +262,6 @@ expression e = case e of
 
     Tuple es -> do
         (size, offsets) <- tupleStructure e
-        -- t <- freshTemp
         t <- getFreeTemp
         -- updateSize t QWord
         let indexedExpressions = NE.zip es (0:|[1..])
@@ -275,7 +275,38 @@ expression e = case e of
 
     -- _ -> pure (Ref $ V $ Temp (-1), [])
 
--- Provided an expression with an index, generates instructions for the expression and stores the UnitExpression result at baseVar + (offsets !! index).
+-- | Same as `expression` but returns result temporary variable (if allocated) without releasing it.
+expressionVar expr = case expr of
+    Access expr member -> do
+        table <- getProg
+        (result, instructions) <- expression expr
+        temp <- getFreeTemp
+        storeOffset <- case member of
+            Member index -> do
+                let eType = exprType table expr
+                -- z <- typeSize (es NE.!! index)
+                -- updateSize v z
+                (_, offsets) <- tupleStructureType eType
+                pure $ offsets !! index
+
+            ConsMember consIndex index -> do
+                let (TCons cons) = exprType table expr
+                (_, _, ctors) <- getTypeDetails cons
+                pure $ fromJust $ M.lookup index $ ctors !! consIndex
+
+        pure (Ref $ V $ temp, instructions ++ [Load (V temp) result storeOffset], Just temp)
+
+    Conditional {} -> appendTuple Nothing <$> expression expr
+    App {} -> appendTuple Nothing <$> expression expr
+    Ident {} -> appendTuple Nothing <$> expression expr
+    Lit {} -> appendTuple Nothing <$> expression expr
+
+    a -> error $ printSource a
+
+    where
+    appendTuple c (a, b) = (a, b, c)
+
+-- | Provided an expression with an index, generates instructions for the expression and stores the UnitExpression result at baseVar + (offsets !! index).
 expressionBaseVar :: Var -> [Int] -> (AST.Expression, Int) -> IRGen [Instruction]
 expressionBaseVar baseVar offsets (e, index) = do
     (result, exprIns) <- expression e
@@ -314,7 +345,7 @@ tupleStructureType (TProd es) = do
     pure (sum sizes, offsets)
 
     where
-    getOffsets table n [x] = [n]
+    getOffsets _ n [_] = [n]
     getOffsets table n (x:xs) = n : getOffsets table (n + exprSize table x) xs
 
     exprSize table eType = case eType of
