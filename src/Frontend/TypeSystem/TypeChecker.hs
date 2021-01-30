@@ -77,8 +77,8 @@ procedure (Proc ps retType name stmts) = do
     where
     unitStmt = do
         t <- getTable
-        let unit = unitId t
-        pure $ StmtExpr $ Ident unit
+        let unit = unitConsId t
+        pure $ StmtExpr $ Cons unit []
 
     isUnit te = assertNominal te . unitId <$> getTable
 

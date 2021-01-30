@@ -36,6 +36,7 @@ import CompilerUtilities.ProgramTable
 import CompilerUtilities.IntermediateProgram
 import Frontend.Simplification.Simplifier
 import CompilerUtilities.SourcePrinter
+import Debug.Trace
 
 type IRGen a = Simplifier AstState GenState a
 
@@ -66,10 +67,6 @@ procedure (Proc params _ name body) = do
     pure $ Routine name (map fst params) locals (instructions ++ last)
 
 lastStatement :: Statement -> IRGen [Instruction]
-lastStatement stmt@(Assignment _ e) = do
-    (_, e) <- expression e
-    pure (e ++ [Comment (printSource stmt), Return (Literal $ NUMBER 0), EndBlock])
-
 lastStatement stmt@(StmtExpr e) = do
     (r, e) <- expression e
     pure (Comment (printSource stmt) : e ++ [Return r, EndBlock])
@@ -153,7 +150,6 @@ expression e = case e of
                 case r of Ref name -> pure (name, e, t)
 
         (args, argIns) <- argument right
-
         case possibleTemp of
             Just temp -> releaseTemp temp
             Nothing -> pure ()
@@ -170,7 +166,7 @@ expression e = case e of
                 (results, ins, freeTemps) <- unzip3 . NE.toList <$> mapM expressionVar args
                 let argIns = concat ins
                 mapM_ releaseTemp (catMaybes freeTemps)
-                pure $ (results, argIns)
+                pure (results, argIns)
 
             _ -> do
                 (result, ins) <- expression right
@@ -326,7 +322,7 @@ tupleStructure (Tuple es) = do
     pure (sum sizes, offsets)
 
     where
-    getOffsets table n [x] = [n]
+    getOffsets _ n [_] = [n]
     getOffsets table n (x:xs) = n : getOffsets table (n + exprSize table x) xs
 
     exprSize table e = let eType = exprType table e
