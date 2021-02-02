@@ -19,10 +19,12 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 
 module CompilerUtilities.IntermediateProgram
 (
+    IR,
     Routine (..),
     Instruction (..),
     Expression (..),
     UnitExpression (..),
+    SimpleExpression (..),
     BinOp (..),
     Var (..),
     Size (..),
@@ -32,16 +34,20 @@ module CompilerUtilities.IntermediateProgram
     Label,
     varSize,
     printList,
-    printNE
+    printNE,
+    primitiveBinaryOperation
 )
 where
 
 import Data.List.NonEmpty
 import Data.Map.Strict (Map)
-import Data.List.Utils
-import CompilerUtilities.SourcePrinter
-import Frontend.AbstractSyntaxTree (Symbol, Parameter, Literal(..))
+import Data.List.Utils (replace)
+-- import CompilerUtilities.SourcePrinter
+import Frontend.AbstractSyntaxTree (Symbol, Parameter)
 import qualified Frontend.AbstractSyntaxTree as AST
+import CompilerUtilities.SourcePrinter
+
+type IR = [Routine]
 
 data Routine = Routine Symbol [Parameter] [Symbol] [Instruction]
 
@@ -51,38 +57,43 @@ data Instruction
     | Mark Label
     | Invoke Name [UnitExpression] Var                  -- Var : The variable in which the return value will be stored.
     | Return UnitExpression                             -- Values to be placed in "OUT" parameters.
-    | Assign Name Expression
+    | AssignVar Var Expression
+    | AssignSymbol Symbol SimpleExpression
     | Alloc Name Int
     | Load Name UnitExpression Index                     -- Var = [UnitExpression + Index]
     | Store Name Index UnitExpression                    -- [Var + Index] = UnitExpression
     | Comment String
     | EndBlock
+    deriving Show
 
 data Expression
     = Unit UnitExpression
     | Bin UnitExpression BinOp UnitExpression
+    deriving Show
 
 data UnitExpression
     = Literal AST.Literal
     | Ref Name
-    -- | Indexed Name Int                                  -- [name + int]
+    deriving Show
+
+data SimpleExpression = SimpleVar Var | SimpleLiteral AST.Literal
+    deriving (Show, Eq)
 
 data Name = S Symbol | V Var | L Label
-    deriving (Eq,Ord)
+    deriving (Eq, Ord, Show)
 
 data BinOp = Add | Sub | Mul | Div | Mod | Greater | Equals | Less
+    deriving Show
 
 newtype Var = Temp Int
-    deriving (Eq, Ord)
+    deriving (Eq, Ord, Show)
 
 type Label = Int
--- newtype Label = Label Int
-    -- deriving (Eq, Ord)
 
 data Size = Byte | Word | DWord | QWord
     deriving (Show, Eq)
 
-type IRState = ([Routine], VarSizes)
+type IRState = (IR, VarSizes)
 type VarSizes = Map Name Size
 
 type Index = Int
@@ -93,39 +104,56 @@ varSize size
     | size <= 4 = DWord
     | otherwise = QWord
 
-instance Show Routine where
-    show (Routine s params locals ins) = "PROC " ++ AST.symStr s ++ " " ++ printSourceList params " " ++ "\nUSES " ++ printSourceList locals " " ++ "\n" ++ printList ins "\n"
+-- | Returns IR equivalent if given symbol is a primitive binary operation.
+primitiveBinaryOperation :: Name -> Maybe BinOp
+primitiveBinaryOperation (S s) = case AST.symStr s of
+    "_operator_p" -> Just Add -- '+'
+    "_operator_m" -> Just Sub -- '-'
+    "_operator_s" -> Just Mul -- '*'
+    "_operator_P" -> Just Mod -- '%'
+    "_operator_g" -> Just Greater -- '>'
+    "_operator_l" -> Just Less -- '<'
+    "_operator_e" -> Just Equals -- '='
+    _ -> Nothing
+primitiveBinaryOperation _ = Nothing
 
-instance Show Instruction where
-    show mnemonic = "\t" ++ case mnemonic of
+instance SourcePrinter Routine where
+    printSource (Routine s params locals ins) = "PROC " ++ AST.symStr s ++ " " ++ printSourceList params " " ++ "\nUSES " ++ printSourceList locals " " ++ "\n" ++ printSourceList ins "\n"
+
+instance SourcePrinter Instruction where
+    printSource mnemonic = "\t" ++ case mnemonic of
         Mark l -> "\n.L" ++ show l ++ ":"
-        ConditionalJump l op r v -> "if " ++ show l ++ " " ++ show op ++ " " ++ show r ++ " jmp " ++ show v
-        Jump v -> "jmp " ++ show v
-        Assign v e -> show v ++ " = " ++ show e
-        Alloc v size -> show v ++ " = Alloc " ++ show size
-        Store v 0 e -> "*" ++ show v ++ " = " ++ show e
-        Store v i e -> "*(" ++ show v ++ " + " ++ show i ++ ") = " ++ show e
-        Load v e 0 -> show v ++ " = *"++ show e
-        Load v e i -> show v ++ " = *("++ show e ++ " + " ++ show i ++ ")"
-        Invoke callee e var -> show var ++ " = invoke " ++ show callee ++ " " ++ show e
-        Return e -> "return " ++ show e
+        ConditionalJump l op r v -> "if " ++ printSource l ++ " " ++ printSource op ++ " " ++ printSource r ++ " jmp " ++ printSource v
+        Jump v -> "jmp " ++ printSource v
+        AssignSymbol v e -> printSource v ++ " = " ++ printSource e
+        AssignVar v e -> printSource v ++ " = " ++ printSource e
+        Alloc v size -> printSource v ++ " = Alloc " ++ show size
+        Store v 0 e -> "*" ++ printSource v ++ " = " ++ printSource e
+        Store v i e -> "*(" ++ printSource v ++ " + " ++ show i ++ ") = " ++ printSource e
+        Load v e 0 -> printSource v ++ " = *"++ printSource e
+        Load v e i -> printSource v ++ " = *("++ printSource e ++ " + " ++ show i ++ ")"
+        Invoke callee e var -> printSource var ++ " = invoke " ++ printSource callee ++ " (" ++ printSourceList e ", " ++ ")"
+        Return e -> "return " ++ printSource e
         Comment c -> "\n\t; " ++ replace "\n\t" "\n\t;\t" c
         EndBlock -> ""
 
-instance Show Expression where
-    show e = case e of
-        Unit ue -> show ue
-        Bin l op r -> show l ++ " " ++ show op ++ " " ++ show r
+instance SourcePrinter Expression where
+    printSource e = case e of
+        Unit ue -> printSource ue
+        Bin l op r -> printSource l ++ " " ++ printSource op ++ " " ++ printSource r
 
-instance Show UnitExpression where
-    show ue = case ue of
+instance SourcePrinter UnitExpression where
+    printSource ue = case ue of
         Literal l -> printSource l
-        Ref op -> show op
-        -- Indexed n 0 -> "["++show n++"]"
-        -- Indexed n index -> show index ++ "["++show n ++ "]"
+        Ref op -> printSource op
 
-instance Show BinOp where
-    show op = case op of
+instance SourcePrinter SimpleExpression where
+    printSource ue = case ue of
+        SimpleVar v -> printSource v
+        SimpleLiteral l -> printSource l
+
+instance SourcePrinter BinOp where
+    printSource op = case op of
         Add -> "+"
         Sub -> "-"
         Mul -> "*"
@@ -135,16 +163,13 @@ instance Show BinOp where
         Equals -> "=="
         Less -> "<"
 
-instance Show Var where
-    show (Temp n) = "t" ++ show n
+instance SourcePrinter Var where
+    printSource (Temp n) = "#" ++ show n
 
--- instance Show Label where
-    -- show (Label id) = ".L" ++ show id
-
-instance Show Name where
-    show (S s) = AST.symStr s
-    show (V v) = show v
-    show (L id) = ".L" ++ show id
+instance SourcePrinter Name where
+    printSource (S s) = AST.symStr s
+    printSource (V v) = printSource v
+    printSource (L id) = ".L" ++ show id
 
 printList [] _ = ""
 printList [x] _ = show x

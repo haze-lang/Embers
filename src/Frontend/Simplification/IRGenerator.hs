@@ -23,48 +23,48 @@ module Frontend.Simplification.IRGenerator
 )
 where
 
-import Data.Maybe
-import Data.List
+import Data.Maybe (catMaybes, fromJust, fromMaybe)
+import Data.List (nub)
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
-import Control.Monad.State
+import Control.Monad.RWS
 import Frontend.AbstractSyntaxTree
 import qualified Frontend.AbstractSyntaxTree as AST
 import CompilerUtilities.ProgramTable
 import CompilerUtilities.IntermediateProgram
-import Frontend.Simplification.Simplifier
 import CompilerUtilities.SourcePrinter
 import Debug.Trace
 
-type IRGen a = Simplifier AstState GenState a
+type IRGen a = RWS ProgramState IR GenState a
 
-compileIR :: ProgramState -> IRState
-compileIR (Program pes, (_, t)) = case runState (program initProgram) (initState t) of
-    (a, (_, (sizes, _, _))) -> (a, sizes)
+compileIR :: ProgramState -> IR
+compileIR (Program pes, tableState) = snd $ evalRWS program env initState
+
     where
+    env = (Program initProgram, tableState)
     initProgram = filter arrow pes
 
     arrow Proc {} = True
     arrow _ = False
 
-program :: [ProgramElement] -> IRGen [Routine]
-program = mapM element
-    where
-    element e = do
-        block <- procedure e
-        endProc
-        pure block
+program :: IRGen ()
+program = do
+    (Program pes) <- fst <$> ask
+    mapM_ element pes
 
-procedure :: ProgramElement -> IRGen Routine
+    where
+    element e = procedure e >> endProc
+
+procedure :: ProgramElement -> IRGen ()
 procedure (Proc params _ name body) = do
     last <- lastStatement (NE.last body)
     body <- mapM statement (NE.init body)
     let (locals', instructions') = unzip body
     let instructions = concat instructions'
     let locals = nub $ catMaybes locals'
-    pure $ Routine name (map fst params) locals (instructions ++ last)
+    tell [Routine name (map fst params) locals (instructions ++ last)]
 
 lastStatement :: Statement -> IRGen [Instruction]
 lastStatement stmt@(StmtExpr e) = do
@@ -72,14 +72,22 @@ lastStatement stmt@(StmtExpr e) = do
     pure (Comment (printSource stmt) : e ++ [Return r, EndBlock])
 
 statement :: Statement -> IRGen (Maybe Symbol, [Instruction])
+statement stmt@(Assignment s (Ident s2)) = do
+    t <- getFreeTemp
+    releaseTemp t
+    pure (Just s, EndBlock : Comment (printSource stmt) : [AssignVar t (Unit $ Ref $ S s2), AssignSymbol s $ SimpleVar t])
+
 statement stmt@(Assignment s e) = do
     (r, e) <- expression e
-    -- Just size -> updateSize t size
-    pure (Just s, EndBlock:Comment (printSource stmt) : e ++ [Assign (S s) (Unit r)])
+    pure (Just s, EndBlock : Comment (printSource stmt) : e ++ [AssignSymbol s $ unitToSimple r])
+
+    where
+    unitToSimple (Ref (V v)) = SimpleVar v
+    unitToSimple (Literal l) = SimpleLiteral l
 
 statement stmt@(AST.StmtExpr e) = do
     (_, e) <- expression e
-    pure (Nothing, EndBlock:Comment (printSource stmt) : e)
+    pure (Nothing, EndBlock : Comment (printSource stmt) : e)
 
 expression :: AST.Expression -> IRGen (UnitExpression, [Instruction])
 expression e = case e of
@@ -99,13 +107,13 @@ expression e = case e of
 
         releaseTemp temp
         pure (Ref $ V temp, block)
-    
+
         where
         assignResult t1 (Ref (V t2)) = if t1 == t2 then [] else error "Not really an error, I'm just not sure if this is supposed to happen." -- Don't emit code for redundant assignments.
-        assignResult resultVar result = [Assign (V resultVar) (Unit result)]
+        assignResult resultVar result = [AssignVar resultVar (Unit result)]
 
     Cons s [] -> do
-        table <- getProg
+        table <- getTable
         let (TCons _type) = fromJust $ lookupType (symId s) table
         (_, size, _) <- getTypeDetails _type
         let (EntryValCons _ _ _ (Just (index, _, _))) = fromJust $ M.lookup (symId s) table
@@ -114,15 +122,13 @@ expression e = case e of
             Nothing -> do
                 t <- getFreeTemp
                 releaseTemp t
-                -- updateSize t QWord
                 pure (Ref $ V t, [Alloc (V t) size, Store (V t) 0 (Literal $ NUMBER index)])
 
     Cons cons args -> do
-        table <- getProg
+        table <- getTable
         let (_ `TArrow` (TCons retType)) = fromJust $ lookupType (symId cons) table
         (_, size, ctors) <- getTypeDetails retType
         let (EntryValCons _ _ _ (Just (consIndex, _, _))) = fromJust $ M.lookup (symId cons) table
-        -- updateSize t QWord
         case args of
             [arg] -> do
                 t <- getFreeTemp
@@ -130,7 +136,7 @@ expression e = case e of
                 releaseTemp t
                 let consFieldOffsets = ctors !! consIndex
                 let (Just offset) = M.lookup 0 consFieldOffsets     -- 0 is used for getting offset of first field (since cons takes only one argument) where the argument is to be stored.
-                pure $ (Ref $ V t, [Alloc (V t) (size), Store (V t) 0 (Literal $ NUMBER consIndex)] ++ ins ++ [Store (V t) offset argResult])
+                pure (Ref $ V t, [Alloc (V t) size, Store (V t) 0 (Literal $ NUMBER consIndex)] ++ ins ++ [Store (V t) offset argResult])
 
             _ -> do
                 let ctor = ctors !! consIndex
@@ -139,7 +145,7 @@ expression e = case e of
                 t <- getFreeTemp
                 instructions <- concat <$> mapM (expressionBaseVar t offsets) indexedExpressions
                 releaseTemp t
-                pure (Ref $ V $ t, Alloc (V t) size : Store (V t) 0 (Literal $ NUMBER consIndex) : instructions)
+                pure (Ref $ V t, Alloc (V t) size : Store (V t) 0 (Literal $ NUMBER consIndex) : instructions)
 
     App left right -> do
         (callee, loadIns, possibleTemp) <- case left of
@@ -156,8 +162,12 @@ expression e = case e of
 
         resultTemp <- getFreeTemp
         releaseTemp resultTemp
-
-        pure (Ref $ V resultTemp, loadIns ++ argIns ++ [Invoke callee args resultTemp])
+        let instructions = loadIns ++ argIns ++ [
+                case primitiveBinaryOperation callee of
+                    Just binOp -> AssignVar resultTemp (Bin (head args) binOp (last args))
+                    Nothing -> Invoke callee args resultTemp
+                ]
+        pure (Ref $ V resultTemp, instructions)
 
         where
         argument arg = case arg of
@@ -176,22 +186,16 @@ expression e = case e of
         (r, e) <- expression expr
         t <- getFreeTemp
         releaseTemp t
-        -- table <- getProg
-        -- let (TCons cons) = exprType table expr
-        -- (tagSize, _, _) <- getTypeDetails cons
-        -- updateSize t tagSize
         pure (Ref $ V t, e ++ [Load (V t) r 0])
 
     Access expr member -> do
-        table <- getProg
+        table <- getTable
         (result, instructions) <- expression expr
         t <- getFreeTemp
         releaseTemp t
         storeOffset <- case member of
             Member index -> do
                 let eType = exprType table expr
-                -- z <- typeSize (es NE.!! index)
-                -- updateSize v z
                 (_, offsets) <- tupleStructureType eType
                 pure $ offsets !! index
 
@@ -200,12 +204,12 @@ expression e = case e of
                 (_, _, ctors) <- getTypeDetails cons
                 pure $ fromJust $ M.lookup index $ ctors !! consIndex
 
-        pure (Ref $ V $ t, instructions ++ [Load (V t) result storeOffset])
+        pure (Ref $ V t, instructions ++ [Load (V t) result storeOffset])
 
     Switch switch cases def -> do
         (tag, e) <- expression switch
         tag <- pure $ case tag of
-            Ref v -> v
+            Ref (V v) -> v
         t <- getFreeTemp
 
         let firstCase = fst $ NE.head cases
@@ -213,7 +217,7 @@ expression e = case e of
             Lit {} -> pure []
 
             Cons {} -> do
-                table <- getProg
+                table <- getTable
                 let (Access switchExpr Tag) = switch
                 let eType = exprType table switchExpr
                 let allConsIds = getAllCons table eType
@@ -226,9 +230,9 @@ expression e = case e of
                 let (Mark firstLabel) = head jmpExprs
                 let caseExprs = concat caseExprs'
                 -- t = tag * 2; tag = c1 + t
-                let tagCalc = [Assign (V t) (Bin (Ref tag) Mul (Literal $ NUMBER 2)),
-                        Assign tag (Bin (Ref $ V t) Add (Ref $ L firstLabel)),
-                        Jump $ tag]
+                let tagCalc = [AssignVar t (Bin (Ref $ V tag) Mul (Literal $ NUMBER 2)),
+                        AssignVar tag (Bin (Ref $ V t) Add (Ref $ L firstLabel)),
+                        Jump $ V tag]
                 pure $ tagCalc ++ jmpExprs ++ caseExprs ++ [Mark endLabel]
 
             a -> error $ printSource a
@@ -248,7 +252,7 @@ expression e = case e of
                 Nothing -> pure def
                 Just e -> expression e
 
-            pure ([Mark l1, Jump $ L l1'], Mark l1':(caseIns ++ [Jump $ L $ endLabel]))
+            pure ([Mark l1, Jump $ L l1'], Mark l1':(caseIns ++ [Jump $ L endLabel]))
 
         getAllCons table (TCons s) =
             let (EntryTCons _ _ _ (Just (_, typeDef, _))) = fromJust $ M.lookup (symId s) table
@@ -259,29 +263,24 @@ expression e = case e of
     Tuple es -> do
         (size, offsets) <- tupleStructure e
         t <- getFreeTemp
-        -- updateSize t QWord
         let indexedExpressions = NE.zip es (0:|[1..])
         instructions <- concat <$> mapM (expressionBaseVar t offsets) indexedExpressions
         releaseTemp t
-        pure (Ref $ V $ t, Alloc (V t) size : instructions)
+        pure (Ref $ V t, Alloc (V t) size : instructions)
 
     Ident s -> pure (Ref $ S s, [])
 
     Lit l _ -> pure (Literal l, [])
 
-    -- _ -> pure (Ref $ V $ Temp (-1), [])
-
 -- | Same as `expression` but returns result temporary variable (if allocated) without releasing it.
 expressionVar expr = case expr of
     Access expr member -> do
-        table <- getProg
+        table <- getTable
         (result, instructions) <- expression expr
         temp <- getFreeTemp
         storeOffset <- case member of
             Member index -> do
                 let eType = exprType table expr
-                -- z <- typeSize (es NE.!! index)
-                -- updateSize v z
                 (_, offsets) <- tupleStructureType eType
                 pure $ offsets !! index
 
@@ -290,7 +289,7 @@ expressionVar expr = case expr of
                 (_, _, ctors) <- getTypeDetails cons
                 pure $ fromJust $ M.lookup index $ ctors !! consIndex
 
-        pure (Ref $ V $ temp, instructions ++ [Load (V temp) result storeOffset], Just temp)
+        pure (Ref $ V temp, instructions ++ [Load (V temp) result storeOffset], Just temp)
 
     Conditional {} -> appendTuple Nothing <$> expression expr
     App {} -> appendTuple Nothing <$> expression expr
@@ -308,15 +307,8 @@ expressionBaseVar baseVar offsets (e, index) = do
     (result, exprIns) <- expression e
     pure $ exprIns ++ [Store (V baseVar) (offsets !! index) result]
 
-typeSize typeExpr = case typeExpr of
-    TCons s -> do
-        t <- getProg
-        pure $ maybe QWord varSize (primitiveType t s)
-    TProd _ -> pure QWord    -- Tuples are passed around by reference
-    TArrow _ _ -> pure QWord
-
 tupleStructure (Tuple es) = do
-    table <- getProg
+    table <- getTable
     let sizes = fmap (exprSize table) es
     let offsets = getOffsets table 0 (NE.toList es)
     pure (sum sizes, offsets)
@@ -327,15 +319,13 @@ tupleStructure (Tuple es) = do
 
     exprSize table e = let eType = exprType table e
         in case eType of
-            TCons s -> case primitiveType table s of
-                Just a -> a
-                Nothing -> 8   -- Ref
+            TCons s -> fromMaybe 8 (primitiveType table s)   -- Ref
             TProd _ -> 8
             TArrow {} -> 8
             a -> error $ show a
 
 tupleStructureType (TProd es) = do
-    table <- getProg
+    table <- getTable
     let sizes = fmap (exprSize table) es
     let offsets = getOffsets table 0 (NE.toList es)
     pure (sum sizes, offsets)
@@ -345,9 +335,7 @@ tupleStructureType (TProd es) = do
     getOffsets table n (x:xs) = n : getOffsets table (n + exprSize table x) xs
 
     exprSize table eType = case eType of
-        TCons s -> case primitiveType table s of
-            Just a -> a
-            Nothing -> 8   -- Ref
+        TCons s -> fromMaybe 8 (primitiveType table s)   -- Ref
         TProd _ -> 8
         TArrow {} -> 8
         a -> error $ show a
@@ -356,34 +344,34 @@ tupleStructureType (TProd es) = do
 
 getTypeDetails :: Symbol -> IRGen TypeDetails
 getTypeDetails s = do
-    t <- getProg
+    t <- getTable
     let (Just x) = M.lookup (symId s) t
     case x of
         EntryTCons _ _ _ (Just (_, _, Just details)) -> pure details
         a -> error $ show a
 
-freshLabel = manipulateLocal $ \(v, l, tp) -> (l, (v, l + 1, tp))
+freshLabel = do
+    (a, l, c) <- get
+    put (a, l + 1, c)
+    pure l
 
-endProc = manipulateLocal $ \(v, _, tp) -> ((), (v, 0, tp))
+endProc = modify $ \
+    (a, _, c) ->
+    (a, 0, c)
 
-manipulateLocal f = do
-    l <- getLocal
-    let (r, newLocal) = f l
-    putLocal newLocal
-    pure r
+getTable = snd . snd <$> ask
 
+type GenState = (VarSizes, LabelNo, TempPool)
 type TempPool = Map TempNo Bool
 type LabelNo = Int
 type TempNo = Int
-type GenState = (VarSizes, LabelNo, TempPool)
-type AstState = Table
 
 getFreeTemp :: IRGen Var
 getFreeTemp = do
-    (sizes, l, pool) <- getLocal
+    (a, b, pool) <- get
     let temp = g $ M.toAscList pool
     let newPool = M.insert temp True pool
-    putLocal (sizes, l, newPool)
+    put (a, b, newPool)
     pure $ Temp temp
 
     where
@@ -391,12 +379,11 @@ getFreeTemp = do
     g = foldr (\(temp, inUse) b -> if not inUse then temp else b) (error "Temp pool exhausted")
 
 releaseTemp :: Var -> IRGen ()
-releaseTemp (Temp temp) = modify $ \(ast, (sizes, l, pool)) -> (ast, (sizes, l, M.insert temp False pool))
+releaseTemp (Temp t) = modify $ \
+    (sizes, l, pool) ->
+    (sizes, l, M.insert t False pool)
 
-initState :: AstState -> SimplifierState AstState GenState
-initState t = initializeState initLocal t
+initState :: GenState
+initState = (M.empty, 0, initPool 7)    -- Pool size 7, TODO: Test lower.
     where
-    initLocal :: GenState
-    initLocal = (M.empty, 0, initPool 7)    -- Pool size 7, TODO: Test lower.
-
     initPool poolSize = M.fromAscList $ zip [0..poolSize - 1] (replicate poolSize False)
