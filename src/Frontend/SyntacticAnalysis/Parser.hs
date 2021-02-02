@@ -533,7 +533,8 @@ bindParams (TArrow (TProd exprList) retType) params = do
             _ -> (p, TProd $ NE.reverse t):aux
         handleProd (t:|[]) (p:|ps) aux = error "Arrow Operator is binary and maps exactly one parameter."
         handleProd (t:|ts) (p:|ps) aux = handleProd (fromList ts) (fromList ps) ((p, t):aux)
-bindParams (TArrow a b) params = error $ show a ++ show b ++ show params
+bindParams (TArrow a@(_ `TArrow` _) retType) (param:|[]) = pure ([(param, a)], retType)
+bindParams (TArrow a retType) params = error $ show a ++ show retType
 
 defineVirtualParam x = defineConsParam x >>= \(p, t) -> pure (Param p ByVal, TCons t)
     where
