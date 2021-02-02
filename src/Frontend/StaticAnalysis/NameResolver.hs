@@ -228,12 +228,12 @@ expression (App l arg) = do
 
 isCons :: Expression -> Table -> Bool
 isCons (Ident s) t = case lookupTableEntry (symId s) t of
-    Just (EntryValCons {}) -> True
+    Just EntryValCons {} -> True
     _ -> False
 isCons _ _ = False
 
 -- | Ensure that all variables referenced inside pure lambda expressions are defined inside the lambda.
-checkLocals e lambdaId = case e of
+checkLocals lambdaBody lambdaId = case lambdaBody of
     Switch e cases defaultExpr -> do
         checkLocals e lambdaId
         mapM_ caseCheck (toList cases)
@@ -251,7 +251,10 @@ checkLocals e lambdaId = case e of
             Nothing -> throwCompilerError (UndefinedSymbol name) (symMeta name)
 
     where
-    checkLocalDefine (EntryVar var _ (Scope varParentId) _) = when (lambdaId /= varParentId) $ throwCompilerError (InvalidStateCapture var) (symMeta var)
+    checkLocalDefine (EntryVar var _ (Scope varParentId) _) = when (lambdaId /= varParentId) $ do
+        t <- getTable
+        let lambdaSym = idToName t lambdaId
+        throwCompilerError (InvalidStateCapture var) (symMeta lambdaSym)
     checkLocalDefine _ = pure ()
 
     caseCheck (e1, e2) = checkLocals e1 lambdaId >> checkLocals e2 lambdaId
