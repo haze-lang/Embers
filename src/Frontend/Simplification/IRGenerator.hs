@@ -23,7 +23,7 @@ module Frontend.Simplification.IRGenerator
 )
 where
 
-import Data.Maybe (catMaybes, fromJust, fromMaybe)
+import Data.Maybe (catMaybes, fromJust, fromMaybe, isJust)
 import Data.List (nub)
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
@@ -122,7 +122,7 @@ expression e = case e of
             Nothing -> do
                 t <- getFreeTemp
                 releaseTemp t
-                pure (Ref $ V t, [Alloc (V t) size, Store (V t) 0 (Literal $ NUMBER index)])
+                pure (Ref $ V t, [Alloc t size, Store t 0 (Literal $ NUMBER index)])
 
     Cons cons args -> do
         table <- getTable
@@ -136,7 +136,7 @@ expression e = case e of
                 releaseTemp t
                 let consFieldOffsets = ctors !! consIndex
                 let (Just offset) = M.lookup 0 consFieldOffsets     -- 0 is used for getting offset of first field (since cons takes only one argument) where the argument is to be stored.
-                pure (Ref $ V t, [Alloc (V t) size, Store (V t) 0 (Literal $ NUMBER consIndex)] ++ ins ++ [Store (V t) offset argResult])
+                pure (Ref $ V t, [Alloc t size, Store t 0 (Literal $ NUMBER consIndex)] ++ ins ++ [Store t offset argResult])
 
             _ -> do
                 let ctor = ctors !! consIndex
@@ -145,7 +145,7 @@ expression e = case e of
                 t <- getFreeTemp
                 instructions <- concat <$> mapM (expressionBaseVar t offsets) indexedExpressions
                 releaseTemp t
-                pure (Ref $ V t, Alloc (V t) size : Store (V t) 0 (Literal $ NUMBER consIndex) : instructions)
+                pure (Ref $ V t, Alloc t size : Store t 0 (Literal $ NUMBER consIndex) : instructions)
 
     App left right -> do
         (callee, loadIns, possibleTemp) <- case left of
@@ -186,7 +186,7 @@ expression e = case e of
         (r, e) <- expression expr
         t <- getFreeTemp
         releaseTemp t
-        pure (Ref $ V t, e ++ [Load (V t) r 0])
+        pure (Ref $ V t, e ++ [Load t r 0])
 
     Access expr member -> do
         table <- getTable
@@ -204,7 +204,7 @@ expression e = case e of
                 (_, _, ctors) <- getTypeDetails cons
                 pure $ fromJust $ M.lookup index $ ctors !! consIndex
 
-        pure (Ref $ V t, instructions ++ [Load (V t) result storeOffset])
+        pure (Ref $ V t, instructions ++ [Load t result storeOffset])
 
     Switch switch cases def -> do
         (tag, e) <- expression switch
@@ -266,7 +266,7 @@ expression e = case e of
         let indexedExpressions = NE.zip es (0:|[1..])
         instructions <- concat <$> mapM (expressionBaseVar t offsets) indexedExpressions
         releaseTemp t
-        pure (Ref $ V t, Alloc (V t) size : instructions)
+        pure (Ref $ V t, Alloc t size : instructions)
 
     Ident s -> pure (Ref $ S s, [])
 
@@ -289,7 +289,7 @@ expressionVar expr = case expr of
                 (_, _, ctors) <- getTypeDetails cons
                 pure $ fromJust $ M.lookup index $ ctors !! consIndex
 
-        pure (Ref $ V temp, instructions ++ [Load (V temp) result storeOffset], Just temp)
+        pure (Ref $ V temp, instructions ++ [Load temp result storeOffset], Just temp)
 
     Conditional {} -> appendTuple Nothing <$> expression expr
     App {} -> appendTuple Nothing <$> expression expr
@@ -305,7 +305,7 @@ expressionVar expr = case expr of
 expressionBaseVar :: Var -> [Int] -> (AST.Expression, Int) -> IRGen [Instruction]
 expressionBaseVar baseVar offsets (e, index) = do
     (result, exprIns) <- expression e
-    pure $ exprIns ++ [Store (V baseVar) (offsets !! index) result]
+    pure $ exprIns ++ [Store baseVar (offsets !! index) result]
 
 tupleStructure (Tuple es) = do
     table <- getTable

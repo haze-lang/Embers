@@ -59,9 +59,9 @@ data Instruction
     | Return UnitExpression                             -- Values to be placed in "OUT" parameters.
     | AssignVar Var Expression
     | AssignSymbol Symbol SimpleExpression
-    | Alloc Name Int
-    | Load Name UnitExpression Index                     -- Var = [UnitExpression + Index]
-    | Store Name Index UnitExpression                    -- [Var + Index] = UnitExpression
+    | Alloc Var Int
+    | Load Var UnitExpression Index                     -- Var = [UnitExpression + Index]
+    | Store Var Index UnitExpression                    -- [Var + Index] = UnitExpression
     | Comment String
     | EndBlock
     deriving Show
