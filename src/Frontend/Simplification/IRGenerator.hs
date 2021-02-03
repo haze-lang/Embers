@@ -186,7 +186,10 @@ expression e = case e of
         (r, e) <- expression expr
         t <- getFreeTemp
         releaseTemp t
-        pure (Ref $ V t, e ++ [Load t r 0])
+        table <- getTable
+        case exprType table expr of
+            TCons _type | isJust $ primitiveType table _type -> pure (Ref $ V t, e ++ [AssignVar t (Unit r)])
+            _ -> pure (Ref $ V t, e ++ [Load t r 0])
 
     Access expr member -> do
         table <- getTable
@@ -208,53 +211,52 @@ expression e = case e of
 
     Switch switch cases def -> do
         (tag, e) <- expression switch
-        tag <- pure $ case tag of
-            Ref (V v) -> v
+        defIns <- expression def
+        tag <- pure $ case tag of Ref (V v) -> v
         t <- getFreeTemp
-
         let firstCase = fst $ NE.head cases
-        ins <- case firstCase of
-            Lit {} -> pure []
 
+        case firstCase of
             Cons {} -> do
                 table <- getTable
                 let (Access switchExpr Tag) = switch
-                let eType = exprType table switchExpr
-                let allConsIds = getAllCons table eType
-                let patternIds = fmap patternId (fst $ NE.unzip cases)
-                let caseMap = M.fromList $ NE.toList $ NE.zip patternIds (snd $ NE.unzip cases)
-                defIns <- expression def
+                    eType = exprType table switchExpr
+                    allConsIds = getAllConsIds table eType
+                    patternIds = fmap patternId (fst $ NE.unzip cases)
+                    caseExprs = snd $ NE.unzip cases
+                    caseMap = M.fromList $ NE.toList $ NE.zip patternIds caseExprs      -- Map each pattern to respective case expressions.
+
                 endLabel <- freshLabel
-                (jmpExprs', caseExprs') <- unzip <$> mapM (eachCons caseMap defIns endLabel) allConsIds
+                (jmpExprs', caseExprs') <- unzip <$> mapM (eachCons t caseMap defIns endLabel) allConsIds
+
                 let jmpExprs = concat jmpExprs'
-                let (Mark firstLabel) = head jmpExprs
-                let caseExprs = concat caseExprs'
-                -- t = tag * 2; tag = c1 + t
-                let tagCalc = [AssignVar t (Bin (Ref $ V tag) Mul (Literal $ NUMBER 2)),
-                        AssignVar tag (Bin (Ref $ V t) Add (Ref $ L firstLabel)),
+                    (Mark firstLabel) = head jmpExprs
+                    caseExprs = concat caseExprs'
+                    tagCalc = [AssignVar tag (Bin (Ref $ V tag) Mul (Literal $ NUMBER 2)),  -- tag = tag * 2
+                        AssignVar tag (Bin (Ref $ V tag) Add (Ref $ L firstLabel)),         -- tag = tag + first label
                         Jump $ V tag]
-                pure $ tagCalc ++ jmpExprs ++ caseExprs ++ [Mark endLabel]
+
+                releaseTemp t
+                let ins = tagCalc ++ jmpExprs ++ caseExprs ++ [Mark endLabel]
+                pure (Ref $ V tag, e ++ ins)
 
             a -> error $ printSource a
 
-        releaseTemp t
-        pure (Ref $ V t, e ++ ins)
-
         where
-        patternId p = case p of
-            Ident s -> symId s
-            Cons s _ -> symId s
-
-        eachCons caseMap def endLabel consId = do
+        eachCons t caseMap def endLabel consId = do
             l1 <- freshLabel
             l1' <- freshLabel
-            (_, caseIns) <- case M.lookup consId caseMap of
-                Nothing -> pure def
+            (r, caseIns) <- case M.lookup consId caseMap of     -- If this constructor has not been matched against, put `default` here, otherwise put the respective case expression.
                 Just e -> expression e
+                Nothing -> pure def
 
-            pure ([Mark l1, Jump $ L l1'], Mark l1':(caseIns ++ [Jump $ L endLabel]))
+            pure ([Mark l1, Jump $ L l1'], Mark l1' : (caseIns ++ [AssignVar t (Unit r)] ++ [Jump $ L endLabel]))
 
-        getAllCons table (TCons s) =
+        patternId p = symId $ case p of
+            Ident s -> error "[Char]"
+            Cons s _ -> s
+
+        getAllConsIds table (TCons s) =
             let (EntryTCons _ _ _ (Just (_, typeDef, _))) = fromJust $ M.lookup (symId s) table
             in case typeDef of
                 SType ids -> ids
