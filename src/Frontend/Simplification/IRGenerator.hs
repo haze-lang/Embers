@@ -62,8 +62,8 @@ procedure (Proc params _ name body) = do
     last <- lastStatement (NE.last body)
     body <- mapM statement (NE.init body)
     let (locals', instructions') = unzip body
-    let instructions = concat instructions'
-    let locals = nub $ catMaybes locals'
+        instructions             = concat instructions'
+        locals                   = nub $ catMaybes locals'
     tell [Routine name (map fst params) locals (instructions ++ last)]
 
 lastStatement :: Statement -> IRGen [Instruction]
@@ -101,9 +101,8 @@ expression e = case e of
         temp <- getFreeTemp
 
         let thenBlock = Mark thenLabel : eThen ++ assignResult temp rThen ++ [Jump $ L contLabel]
-        let elseBlock = Mark elseLabel : eElse ++ assignResult temp rElse ++ [Mark contLabel]
-
-        let block = condition ++ [ConditionalJump r Equals (Literal $ NUMBER 1) (L thenLabel), Jump $ L elseLabel] ++ thenBlock ++ elseBlock
+            elseBlock = Mark elseLabel : eElse ++ assignResult temp rElse ++ [Mark contLabel]
+            block     = condition ++ [ConditionalJump r Equals (Literal $ NUMBER 1) (L thenLabel), Jump $ L elseLabel] ++ thenBlock ++ elseBlock
 
         releaseTemp temp
         pure (Ref $ V temp, block)
@@ -114,9 +113,9 @@ expression e = case e of
 
     Cons s [] -> do
         table <- getTable
-        let (TCons _type) = fromJust $ lookupType (symId s) table
+        let TCons _type = fromJust $ lookupType (symId s) table
+            EntryValCons _ _ _ (Just (index, _, _)) = fromJust $ M.lookup (symId s) table
         (_, size, _) <- getTypeDetails _type
-        let (EntryValCons _ _ _ (Just (index, _, _))) = fromJust $ M.lookup (symId s) table
         case primitiveType table _type of
             Just _ -> pure (Literal (NUMBER index), [])
             Nothing -> do
@@ -126,22 +125,22 @@ expression e = case e of
 
     Cons cons args -> do
         table <- getTable
-        let (_ `TArrow` (TCons retType)) = fromJust $ lookupType (symId cons) table
+        let _ `TArrow` (TCons retType) = fromJust $ lookupType (symId cons) table
         (_, size, ctors) <- getTypeDetails retType
-        let (EntryValCons _ _ _ (Just (consIndex, _, _))) = fromJust $ M.lookup (symId cons) table
+        let EntryValCons _ _ _ (Just (consIndex, _, _)) = fromJust $ M.lookup (symId cons) table
         case args of
             [arg] -> do
                 t <- getFreeTemp
                 (argResult, ins) <- expression arg
                 releaseTemp t
                 let consFieldOffsets = ctors !! consIndex
-                let (Just offset) = M.lookup 0 consFieldOffsets     -- 0 is used for getting offset of first field (since cons takes only one argument) where the argument is to be stored.
+                    Just offset      = M.lookup 0 consFieldOffsets     -- 0 is used for getting offset of first field (since cons takes only one argument) where the argument is to be stored.
                 pure (Ref $ V t, [Alloc t size, Store t 0 (Literal $ NUMBER consIndex)] ++ ins ++ [Store t offset argResult])
 
             _ -> do
-                let ctor = ctors !! consIndex
-                let offsets = map (\index -> fromJust $ M.lookup index ctor) [0..]
                 let indexedExpressions = zip args [0..]
+                    ctor               = ctors !! consIndex
+                    offsets            = map (\index -> fromJust $ M.lookup index ctor) [0..]
                 t <- getFreeTemp
                 instructions <- concat <$> mapM (expressionBaseVar t offsets) indexedExpressions
                 releaseTemp t
@@ -184,12 +183,13 @@ expression e = case e of
 
     Access expr Tag -> do
         (r, e) <- expression expr
-        t <- getFreeTemp
-        releaseTemp t
         table <- getTable
         case exprType table expr of
-            TCons _type | isJust $ primitiveType table _type -> pure (Ref $ V t, e ++ [AssignVar t (Unit r)])
-            _ -> pure (Ref $ V t, e ++ [Load t r 0])
+            TCons _type | isJust $ primitiveType table _type -> pure (r, e)
+            _ -> do
+                t <- getFreeTemp
+                releaseTemp t
+                pure (Ref $ V t, e ++ [Load t r 0])
 
     Access expr member -> do
         table <- getTable
@@ -203,61 +203,72 @@ expression e = case e of
                 pure $ offsets !! index
 
             ConsMember consIndex index -> do
-                let (TCons cons) = exprType table expr
+                let TCons cons = exprType table expr
                 (_, _, ctors) <- getTypeDetails cons
                 pure $ fromJust $ M.lookup index $ ctors !! consIndex
 
         pure (Ref $ V t, instructions ++ [Load t result storeOffset])
 
     Switch switch cases def -> do
-        (tag, e) <- expression switch
-        defIns <- expression def
-        tag <- pure $ case tag of Ref (V v) -> v
-        t <- getFreeTemp
-        let firstCase = fst $ NE.head cases
+        (tag, switchIns) <- expression switch
+        (defRes, defIns) <- expression def
+        tag <- case tag of
+            Ref v@(V _) -> pure v
+            Ref s@(S _) -> pure s
 
+        -- Get a var for cases which have non-var results. This will be the result of this switch expression.
+        resultVar <- getFreeTemp
+        releaseTemp resultVar       -- Since this var is only ever written by one branch and returned at the end.
+
+        let firstCase = fst $ NE.head cases
         case firstCase of
             Cons {} -> do
                 table <- getTable
-                let (Access switchExpr Tag) = switch
-                    eType = exprType table switchExpr
-                    allConsIds = getAllConsIds table eType
-                    patternIds = fmap patternId (fst $ NE.unzip cases)
-                    caseExprs = snd $ NE.unzip cases
-                    caseMap = M.fromList $ NE.toList $ NE.zip patternIds caseExprs      -- Map each pattern to respective case expressions.
-
+                defLabel <- freshLabel
                 endLabel <- freshLabel
-                (jmpExprs', caseExprs') <- unzip <$> mapM (eachCons t caseMap defIns endLabel) allConsIds
 
-                let jmpExprs = concat jmpExprs'
-                    (Mark firstLabel) = head jmpExprs
-                    caseExprs = concat caseExprs'
-                    tagCalc = [AssignVar tag (Bin (Ref $ V tag) Mul (Literal $ NUMBER 2)),  -- tag = tag * 2
-                        AssignVar tag (Bin (Ref $ V tag) Add (Ref $ L firstLabel)),         -- tag = tag + first label
-                        Jump $ V tag]
+                let Access switchExpr Tag   = switch
+                    eType                   = exprType table switchExpr
+                    allConsIds              = getAllConsIds table eType
+                    matchedConsIds          = fmap consId (fst $ NE.unzip cases)
+                    caseExprs               = snd $ NE.unzip cases
+                    consCaseMap             = M.fromList $ NE.toList $ NE.zip matchedConsIds caseExprs      -- Map each matched constructor to respective case expressions.
 
-                releaseTemp t
-                let ins = tagCalc ++ jmpExprs ++ caseExprs ++ [Mark endLabel]
-                pure (Ref $ V tag, e ++ ins)
+                (jmpExprs', caseExprs') <- unzip <$> mapM (consCase resultVar consCaseMap defLabel endLabel) allConsIds
+
+                let jmpExprs          = concat jmpExprs'
+                    Mark firstLabel   = head jmpExprs
+                    caseExprs         = concat caseExprs'
+                    t'                = resultVar   -- Same var since tag calculation immediately reads it.
+                    tagCalc           = AssignVar t' (Bin (Ref tag) Mul (Literal $ NUMBER 2))           -- t' = tag * 2
+                                      : AssignVar t' (Bin (Ref $ V t') Add (Ref $ L firstLabel))        -- t' = t' + first label
+                                      : [Jump $ V t']
+
+                let defaultIns = Mark defLabel : defIns ++ resultIns resultVar defRes
+                    ins        = tagCalc ++ jmpExprs ++ caseExprs
+                pure (Ref $ V resultVar, switchIns ++ ins ++ defaultIns ++ [Mark endLabel])
 
             a -> error $ printSource a
 
         where
-        eachCons t caseMap def endLabel consId = do
+        consCase resultVar consCaseMap defLabel endLabel consId = do
             l1 <- freshLabel
             l1' <- freshLabel
-            (r, caseIns) <- case M.lookup consId caseMap of     -- If this constructor has not been matched against, put `default` here, otherwise put the respective case expression.
-                Just e -> expression e
-                Nothing -> pure def
+            case M.lookup consId consCaseMap of     -- If this constructor has not been matched against, put a jump to default here, otherwise put the respective case expression.
+                Nothing -> pure ([Mark l1, Jump $ L l1'], Mark l1' : [Jump $ L defLabel])
+                Just _case -> do
+                    (r, caseIns) <- expression _case
+                    pure ([Mark l1, Jump $ L l1'], Mark l1' : (caseIns ++ resultIns resultVar r ++ [Jump $ L endLabel]))
 
-            pure ([Mark l1, Jump $ L l1'], Mark l1' : (caseIns ++ [AssignVar t (Unit r)] ++ [Jump $ L endLabel]))
+        resultIns resultVar (Ref (V result)) | resultVar == result = []
+        resultIns resultVar r = [AssignVar resultVar (Unit r)]
 
-        patternId p = symId $ case p of
-            Ident s -> error "[Char]"
-            Cons s _ -> s
+        consId = symId . consSym
+
+        consSym (Cons s _) = s
 
         getAllConsIds table (TCons s) =
-            let (EntryTCons _ _ _ (Just (_, typeDef, _))) = fromJust $ M.lookup (symId s) table
+            let EntryTCons _ _ _ (Just (_, typeDef, _)) = fromJust $ M.lookup (symId s) table
             in case typeDef of
                 SType ids -> ids
                 RecType id _ -> [id]
@@ -287,7 +298,7 @@ expressionVar expr = case expr of
                 pure $ offsets !! index
 
             ConsMember consIndex index -> do
-                let (TCons cons) = exprType table expr
+                let TCons cons = exprType table expr
                 (_, _, ctors) <- getTypeDetails cons
                 pure $ fromJust $ M.lookup index $ ctors !! consIndex
 
@@ -347,7 +358,7 @@ tupleStructureType (TProd es) = do
 getTypeDetails :: Symbol -> IRGen TypeDetails
 getTypeDetails s = do
     t <- getTable
-    let (Just x) = M.lookup (symId s) t
+    let Just x = M.lookup (symId s) t
     case x of
         EntryTCons _ _ _ (Just (_, _, Just details)) -> pure details
         a -> error $ show a
