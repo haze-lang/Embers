@@ -24,7 +24,7 @@ module CompilerUtilities.ProgramTable
     ProgramState, TableState, ID, NextID, AbsoluteName, Table, TypeDetails, TypeDef(..),
     initializeTable, initializeTableWith, insertTableEntry, updateTableEntry, lookupTableEntry,
     idToName, nameLookup, idToScope, lookupType, exprType,
-    boolId, unitId, intId, charId,
+    boolId, unitId, intId, unitConsId, charId,
     primitiveType,
     getRelative
 )
@@ -301,6 +301,7 @@ lookupType id t =
 
 boolId = globalLookup "Bool"
 unitId = globalLookup "Unit"
+unitConsId = globalLookup "Unit_C"
 intId = globalLookup "Int"
 natId = globalLookup "Nat"
 charId = globalLookup "Char"
@@ -316,7 +317,8 @@ primitiveType table s
     | otherwise = Nothing
 
 globalLookup name table = case nameLookup (name:|["Global"]) table of
-    Just (id, EntryTCons symb _ _ _) -> symb
+    Just (_, EntryTCons symb _ _ _) -> symb
+    Just (_, EntryValCons symb _ _ _) -> symb
     Nothing -> error $ "Standard Library Initialization Error:" ++ name ++ " not found."
 
 -- Helper Types, Aliases & Utilities
