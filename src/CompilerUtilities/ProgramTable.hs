@@ -69,6 +69,9 @@ stdLib = do
     insertPrint
     insertPlus
     insertMinus
+    insertAsterisk
+    insertForwardSlash
+    insertPercent
     insertReset
     insertShift
 
@@ -89,6 +92,21 @@ insertPlus = insertProc "_operator_p" param intType
             pure [s, s]
 
 insertMinus = insertProc "_operator_m" param intType
+    where param = do
+            s <- intType
+            pure [s, s]
+
+insertAsterisk = insertProc "_operator_s" param intType
+    where param = do
+            s <- intType
+            pure [s, s]
+
+insertForwardSlash = insertProc "_operator_f" param intType
+    where param = do
+            s <- intType
+            pure [s, s]
+
+insertPercent = insertProc "_operator_P" param intType
     where param = do
             s <- intType
             pure [s, s]

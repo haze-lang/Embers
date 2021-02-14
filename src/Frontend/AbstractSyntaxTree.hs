@@ -21,6 +21,7 @@ module Frontend.AbstractSyntaxTree where
 
 import Data.List.NonEmpty
 import CompilerUtilities.SourcePrinter
+import qualified Data.List.NonEmpty as NE
 
 newtype Program = Program [ProgramElement]
     deriving (Show,Eq)
@@ -205,6 +206,8 @@ getSymWithId id name = Symb (ResolvedName id (name:|["Global"])) (Meta 0 0 "")
 instance Eq Identifier where
     (IDENTIFIER a) == (IDENTIFIER b) = a == b
     (ResolvedName a _) == (ResolvedName b _) = a == b
+    (IDENTIFIER a) == (ResolvedName _ b) = a == NE.head b
+    a == b = error $ show a ++ "\n" ++ show b
 
 instance Eq Symbol where
     (Symb a _) == (Symb b _) = a == b

@@ -110,6 +110,7 @@ primitiveBinaryOperation (S s) = case AST.symStr s of
     "_operator_p" -> Just Add -- '+'
     "_operator_m" -> Just Sub -- '-'
     "_operator_s" -> Just Mul -- '*'
+    "_operator_f" -> Just Div -- '/'
     "_operator_P" -> Just Mod -- '%'
     "_operator_g" -> Just Greater -- '>'
     "_operator_l" -> Just Less -- '<'

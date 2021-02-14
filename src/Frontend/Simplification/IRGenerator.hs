@@ -19,7 +19,7 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 
 module Frontend.Simplification.IRGenerator
 (
-    compileIR
+    generateIR
 )
 where
 
@@ -39,8 +39,8 @@ import Debug.Trace
 
 type IRGen a = RWS ProgramState IR GenState a
 
-compileIR :: ProgramState -> IR
-compileIR (Program pes, tableState) = snd $ evalRWS program env initState
+generateIR :: ProgramState -> IR
+generateIR (Program pes, tableState) = snd $ evalRWS program env initState
 
     where
     env = (Program initProgram, tableState)

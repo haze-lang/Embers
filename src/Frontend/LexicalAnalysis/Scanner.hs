@@ -167,6 +167,7 @@ identSymbols = do
         <|> (tryChar '<' >> pure 'l')
         <|> (tryChar '>' >> pure 'g')
         <|> (tryChar '?' >> pure 'q')
+        <|> (tryChar '/' >> pure 'f')
     pure $ NEHead $ T (TkSymb $ IDENTIFIER ("_operator_" ++ s)) m
 
 -- Comments ending with file ending are not supported.
