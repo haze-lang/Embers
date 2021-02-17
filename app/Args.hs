@@ -1,31 +1,54 @@
 module Args where
 
+import Backend.BackendArgs
+
 import Options.Applicative
-import Data.Semigroup ((<>))
 
 data Args = Args {
-    fileInput :: Input,
+    fileInput :: String,
+    fileOutput :: String,
     genIR :: Bool,
-    genSimplified :: Bool }
+    genSimplified :: Bool,
+    genParse :: Bool,
+    asmArgs :: AsmGeneratorArgs }
 
-newtype Input = FileInput FilePath
+asmGen :: Parser AsmGeneratorArgs
+asmGen = AsmGeneratorArgs
+        <$> switch
+        (   long "irc"
+        <>  help "Add IR comments in generated assembly" )
+        <*> switch
+        (   long "src"
+        <>  help "Add source comments in generated assembly" )
 
-input :: Parser Input
-input = FileInput
-    <$> strOption
+output :: Parser String
+output = strOption
+        (   short 'o'
+        <>  value "..\\Output"
+        <>  metavar "OUT"
+        <>  help "Output file" )
+
+input :: Parser String
+input = strOption
         (   short 'f'
+        <>  value "..\\Haze.hz"
         <>  metavar "FILENAME"
         <>  help "Input file" )
 
 emitIR :: Parser Bool
 emitIR = switch
-          ( short 'i'
-         <> help "Whether to emit intermediate code" )
+          ( long "ir"
+         <> help "Emit internal IR" )
+
+emitParse :: Parser Bool
+emitParse = switch
+          ( long "parse"
+         <> help "Emit parsed AST" )
 
 emitSimpleAST :: Parser Bool
 emitSimpleAST = switch
-          ( short 'c'
-         <> help "Whether to emit simplified AST" )
+          ( long "ast"
+         <> help "Emit simplified AST" )
 
 parseArgs :: Parser Args
-parseArgs = Args <$> input <*> emitIR <*> emitSimpleAST <**> helper
+parseArgs = Args <$> input <*> output <*> emitIR <*> emitSimpleAST <*> emitParse <*> asmGen <**> helper

@@ -19,61 +19,89 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 
 module Main where
 
-import System.IO
-import qualified CompilerUtilities.DebugUtil as Debug
-import Frontend.StaticAnalysis.NameResolver (resolveNames)
-import Frontend.SyntacticAnalysis.Parser (parseTokens)
-import Frontend.LexicalAnalysis.Scanner (scan, scanProcessed)
+import Frontend.Error.CompilerError
+import Frontend.AbstractSyntaxTree ( printMeta )
+import CompilerUtilities.ProgramTable
+import qualified CompilerUtilities.IntermediateProgram as IR
+import CompilerUtilities.SourcePrinter
+
+import Frontend.LexicalAnalysis.Scanner
+import Frontend.SyntacticAnalysis.Parser
+import Frontend.StaticAnalysis.NameResolver
+import Frontend.TypeSystem.TypeChecker
+import Frontend.Simplification.CpsTransformer
+import Frontend.Simplification.AccessResolver
+import Frontend.Simplification.LambdaResolver
+import Frontend.Simplification.FunctionResolver
+import Frontend.Simplification.RecursiveExpressionResolver
+import Frontend.Simplification.IRGenerator
+import Backend.AsmGeneration.AsmGenerator
+
 import Options.Applicative
-import Text.Pretty.Simple (pPrint)
+import System.Directory (makeAbsolute)
+import System.FilePath.Windows (addExtension, takeFileName, replaceExtension)
 import Args
+import System.Console.ANSI
+import Control.Monad (when)
 
-prompt :: String -> IO String
-prompt text = do
-    putStr text
-    hFlush stdout
-    getLine
-
-file path = do
-    content <- readFile path
-    case scanProcessed content of
-        Right tokens -> pPrint (resolveNames $ parseTokens tokens)
-        Left err -> lexicalErrors err
-
-repl = do
-        input <- prompt "Embers>"
-        case scanProcessed input of
-            Right tokens -> pPrint (resolveNames $ parseTokens tokens)
-            Left err -> lexicalErrors err
-        repl
-
-lexicalErrors :: [String] -> IO ()
-lexicalErrors errors = do
-    print "Lexical Errors found."
-    pPrint errors
+analyze :: String -> String -> String -> Either [CompilerError] ProgramState
+analyze sourceFilename std src = do
+    stdTokens <- scanProcessed "" std
+    srcTokens <- scanProcessed sourceFilename src
+    ast <- parseTokensStdLib stdTokens srcTokens
+    resolvedAst <- resolveNames ast
+    typeCheck resolvedAst
 
 main :: IO ()
 main = do
-    putLicenseHeader
     args <- execParser (info parseArgs idm)
-    run args
+    sourcePath <- makeAbsolute $ fileInput args
+    stdLibPath <- makeAbsolute "..\\StandardLibrary.hz"
+    let inFileName = takeFileName $ fileInput args
+    outPath <- makeAbsolute $ fileOutput args
 
-run :: Args -> IO ()
-run (Args _ (Just l)) = case l of
-    Full -> putLicense
-    Warranty -> putWarranty
-    Conditions -> putConditions
+    source <- readFile sourcePath
+    stdLib <- readFile stdLibPath
 
-run (Args (Just (FileInput p)) _) = file p
+    case analyze inFileName stdLib source of
+        Left errors -> printErrors errors
+        Right pState -> do
+            let cps = toCps pState
+                lambdas = resolveLambdas cps
+                functions = resolveFunctions lambdas
+                constructions = resolveExpressions functions
+                resolvedAccesses = resolvePatternMatches constructions
+                ir = generateIR resolvedAccesses
+                asm = generateAsm ir (asmArgs args)
+            when (genParse args) $ writeFile (outPathwithExtension ".parse") $ printSource $ fst pState
+            when (genSimplified args) $ writeFile (outPathwithExtension ".simple") $ printSource $ fst resolvedAccesses
+            when (genIR args) $ writeFile (outPathwithExtension ".ir") $ printSourceList ir "\n\n"
+            writeFile (outPathwithExtension ".asm") $ printSourceList asm "\n"
 
-run _ = repl
+            where outPathwithExtension = addExtension outPath
 
-putLicenseHeader = putStrLn ("Embers  Copyright (C) 2019  Syed Moiz Ur Rehman\n"++"This program comes with ABSOLUTELY NO WARRANTY; for details type `embers --warranty'.\n"++"This is free software, and you are welcome to redistribute it under\n"++"certain conditions; type `embers --conditions' for details.\n\n")
+printErrors :: [CompilerError] -> IO ()
+printErrors errors = do
+    putStrLnVividRed "Compilation Failed."
+    mapM_ printError errors
 
-putLicense = putStrLn "Full License"
+    where
+    printError (LexicalError e meta) = do
+        putStr $ printMeta meta ++ " "
+        putStrLnVividRed "Lexical Error:"
+        print e
 
--- Warranty: Section 15
-putWarranty = putStrLn ("  15. Disclaimer of Warranty.\n\n"++"  THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY\nAPPLICABLE LAW.  EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT\nHOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM \"AS IS\" WITHOUT WARRANTY\nOF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO,\nTHE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR\nPURPOSE.  THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE PROGRAM\nIS WITH YOU.  SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF\nALL NECESSARY SERVICING, REPAIR OR CORRECTION.")
+    printError (Error element meta error) = do
+        putStr $ printMeta meta ++ " "
+        let (header, msg) = case error of
+                NameResolutionError e -> ("Error:", show e)
+                ParseError e -> ("Syntax Error:", show e)
+                TypeError e -> ("Type Error:", show e)
+        putStrLnVividRed header
+        putStrLn msg
+    printError a = error $ show a
 
--- Conditions: Section 2, 4, 5, 6
-putConditions = putStrLn ("")
+    putStrLnVividRed str = do
+        setSGR [SetColor Foreground Vivid Red]
+        putStrLn str
+        setSGR [Reset]
