@@ -19,7 +19,7 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 
 module Frontend.Error.CompilerError where
 
-import Frontend.AbstractSyntaxTree
+import CompilerUtilities.AbstractSyntaxTree
 import Frontend.Error.ParseError
 import Frontend.Error.NameResolutionError
 import Frontend.Error.TypeError

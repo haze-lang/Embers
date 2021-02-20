@@ -33,7 +33,7 @@ import Data.List.NonEmpty (NonEmpty((:|)), (<|), fromList, toList, reverse)
 import qualified Data.Map as M
 import qualified Data.Char
 
-import Frontend.AbstractSyntaxTree
+import CompilerUtilities.AbstractSyntaxTree
 import CompilerUtilities.ProgramTable
 import Frontend.Error.CompilerError
 import Frontend.Error.ParseError

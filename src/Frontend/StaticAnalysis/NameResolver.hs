@@ -34,7 +34,7 @@ import Data.Set (Set)
 import qualified Data.Set as S
 import CompilerUtilities.ProgramTable
 import qualified CompilerUtilities.IntermediateProgram as IR
-import Frontend.AbstractSyntaxTree
+import CompilerUtilities.AbstractSyntaxTree
 import Data.List.NonEmpty as NE (NonEmpty((:|)), (<|), fromList, toList, map)
 import qualified Data.List.NonEmpty as NE
 import Frontend.Error.CompilerError

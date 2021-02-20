@@ -11,7 +11,7 @@ import qualified Data.Map.Strict as M
 import Data.Maybe (fromJust)
 import Control.Monad.State
 import CompilerUtilities.ProgramTable
-import Frontend.AbstractSyntaxTree
+import CompilerUtilities.AbstractSyntaxTree
 import Frontend.Simplification.Simplifier
 
 type Transformer a = ProgramSimplifier TransformState a

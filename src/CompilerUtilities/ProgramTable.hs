@@ -33,7 +33,7 @@ where
 import Data.Map.Strict (Map)
 import Data.Maybe (fromJust)
 import qualified Data.List.NonEmpty as NE
-import Frontend.AbstractSyntaxTree
+import CompilerUtilities.AbstractSyntaxTree
 import qualified Data.Map.Strict as M
 import Control.Monad.State
 import Data.List.NonEmpty (NonEmpty((:|)), (<|))

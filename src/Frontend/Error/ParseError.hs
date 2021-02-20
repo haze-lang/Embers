@@ -19,7 +19,7 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 
 module Frontend.Error.ParseError where
 
-import Frontend.AbstractSyntaxTree
+import CompilerUtilities.AbstractSyntaxTree
 import Data.List.NonEmpty
 import qualified CompilerUtilities.IntermediateProgram as IR
 import CompilerUtilities.SourcePrinter

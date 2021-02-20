@@ -6,7 +6,7 @@ where
 
 import Control.Monad.State
 import CompilerUtilities.ProgramTable
-import Frontend.AbstractSyntaxTree
+import CompilerUtilities.AbstractSyntaxTree
 import Data.List.NonEmpty (NonEmpty(..))
 import Frontend.Simplification.Simplifier
 

@@ -20,7 +20,7 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 module Frontend.LexicalAnalysis.Token where
 
 import Data.List.NonEmpty
-import Frontend.AbstractSyntaxTree
+import CompilerUtilities.AbstractSyntaxTree
 
 data Token = T TokenType Metadata
     deriving (Show,Eq)

@@ -30,7 +30,7 @@ import Control.Monad.State
 import Data.Maybe (fromJust)
 import Frontend.Error.CompilerError
 import Frontend.Error.TypeError
-import Frontend.AbstractSyntaxTree
+import CompilerUtilities.AbstractSyntaxTree
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import CompilerUtilities.ProgramTable

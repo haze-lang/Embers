@@ -21,8 +21,8 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 
 module Backend.AbstractAssembly where
 
+import qualified CompilerUtilities.AbstractSyntaxTree as AST
 import qualified CompilerUtilities.IntermediateProgram as IR
-import qualified Frontend.AbstractSyntaxTree as AST
 import Data.List.Utils
 import Control.Monad.State
 import Data.Map.Strict (Map)

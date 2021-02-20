@@ -43,8 +43,8 @@ import Data.List.NonEmpty
 import Data.Map.Strict (Map)
 import Data.List.Utils (replace)
 -- import CompilerUtilities.SourcePrinter
-import Frontend.AbstractSyntaxTree (Symbol, Parameter)
-import qualified Frontend.AbstractSyntaxTree as AST
+import CompilerUtilities.AbstractSyntaxTree (Symbol, Parameter)
+import qualified CompilerUtilities.AbstractSyntaxTree as AST
 import CompilerUtilities.SourcePrinter
 
 type IR = [Routine]

@@ -5,7 +5,7 @@ module Frontend.TypeSystem.Inference.Unifier
 where
 
 import Frontend.Error.TypeError
-import Frontend.AbstractSyntaxTree
+import CompilerUtilities.AbstractSyntaxTree
 import CompilerUtilities.ProgramTable
 import Data.Tuple.Extra (snd3, thd3)
 import Data.List.NonEmpty (NonEmpty((:|)))

@@ -6,7 +6,7 @@ where
 
 import Control.Monad.State
 import CompilerUtilities.ProgramTable
-import Frontend.AbstractSyntaxTree
+import CompilerUtilities.AbstractSyntaxTree
     ( mapExpression,
       mapStatement,
       Expression(Switch, Cons, Tuple, App, Ident, Lit),

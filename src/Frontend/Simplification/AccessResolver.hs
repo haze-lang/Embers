@@ -6,7 +6,7 @@ where
 
 import Control.Monad.State
 import CompilerUtilities.ProgramTable
-import Frontend.AbstractSyntaxTree
+import CompilerUtilities.AbstractSyntaxTree
 import Data.Map.Strict (Map)
 import Data.Maybe (fromMaybe, fromJust)
 import qualified Data.Map.Strict as M

@@ -17,7 +17,7 @@ You should have received a copy of the GNU General Public License
 along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
-module Frontend.Simplification.IRGenerator
+module MiddleEnd.IRGenerator
 (
     generateIR
 )
@@ -30,8 +30,8 @@ import qualified Data.List.NonEmpty as NE
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Control.Monad.RWS
-import Frontend.AbstractSyntaxTree
-import qualified Frontend.AbstractSyntaxTree as AST
+import CompilerUtilities.AbstractSyntaxTree
+import qualified CompilerUtilities.AbstractSyntaxTree as AST
 import CompilerUtilities.ProgramTable
 import CompilerUtilities.IntermediateProgram
 import CompilerUtilities.SourcePrinter
@@ -304,12 +304,14 @@ expressionVar expr = case expr of
 
         pure (Ref $ V temp, instructions ++ [Load temp result storeOffset], Just temp)
 
+    Cons {} -> appendTuple Nothing <$> expression expr
+    Tuple {} -> appendTuple Nothing <$> expression expr
     Conditional {} -> appendTuple Nothing <$> expression expr
     App {} -> appendTuple Nothing <$> expression expr
     Ident {} -> appendTuple Nothing <$> expression expr
     Lit {} -> appendTuple Nothing <$> expression expr
 
-    a -> error $ printSource a
+    a -> error $ show a
 
     where
     appendTuple c (a, b) = (a, b, c)

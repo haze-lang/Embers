@@ -17,7 +17,7 @@ You should have received a copy of the GNU General Public License
 along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
-module Frontend.AbstractSyntaxTree where
+module CompilerUtilities.AbstractSyntaxTree where
 
 import Data.List.NonEmpty
 import CompilerUtilities.SourcePrinter

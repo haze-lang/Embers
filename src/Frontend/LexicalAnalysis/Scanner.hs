@@ -29,7 +29,7 @@ where
 import Control.Monad.State
 import Control.Monad.Except
 import Control.Monad.Identity
-import Frontend.AbstractSyntaxTree
+import CompilerUtilities.AbstractSyntaxTree
 import Frontend.LexicalAnalysis.Token
 import Control.Applicative
 import Data.List.NonEmpty (NonEmpty(..))

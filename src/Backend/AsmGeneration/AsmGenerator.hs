@@ -32,7 +32,7 @@ import qualified Data.Set as S
 import Control.Monad.RWS
 import Control.Monad.Reader
 import Control.Monad.State
-import Frontend.AbstractSyntaxTree
+import CompilerUtilities.AbstractSyntaxTree
 import qualified CompilerUtilities.IntermediateProgram as IR
 import CompilerUtilities.IntermediateProgram
     (
@@ -69,7 +69,7 @@ generateAsm ir args = case snd $ evalRWS program (environment ir argsEnv) initSt
     argsEnv = Handlers
         (if sourceCommentsArg args then srcComments else noSrcComments)
         -- (if irCommentsArg args then irComments else noIrComments)
-        (irComments)
+        irComments
 
 program :: AsmGenerator ()
 program = asks ir >>= mapM_ routine

@@ -22,7 +22,7 @@ module Backend.AsmGeneration.GeneratorHelper
 
 where
 
-import Frontend.AbstractSyntaxTree (Symbol)
+import CompilerUtilities.AbstractSyntaxTree (Symbol)
 import qualified CompilerUtilities.IntermediateProgram as IR
 import Backend.AbstractAssembly as ASM
 import CompilerUtilities.IntermediateProgram

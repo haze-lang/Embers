@@ -20,7 +20,7 @@ along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 module Main where
 
 import Frontend.Error.CompilerError
-import Frontend.AbstractSyntaxTree ( printMeta )
+import CompilerUtilities.AbstractSyntaxTree ( printMeta )
 import CompilerUtilities.ProgramTable
 import qualified CompilerUtilities.IntermediateProgram as IR
 import CompilerUtilities.SourcePrinter
@@ -34,7 +34,7 @@ import Frontend.Simplification.AccessResolver
 import Frontend.Simplification.LambdaResolver
 import Frontend.Simplification.FunctionResolver
 import Frontend.Simplification.RecursiveExpressionResolver
-import Frontend.Simplification.IRGenerator
+import MiddleEnd.IRGenerator
 import Backend.AsmGeneration.AsmGenerator
 
 import Options.Applicative
@@ -43,6 +43,7 @@ import System.FilePath.Windows (addExtension, takeFileName, replaceExtension)
 import Args
 import System.Console.ANSI
 import Control.Monad (when)
+import Backend.BackendArgs
 
 analyze :: String -> String -> String -> Either [CompilerError] ProgramState
 analyze sourceFilename std src = do

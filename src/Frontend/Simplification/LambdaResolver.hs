@@ -31,7 +31,7 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
-import Frontend.AbstractSyntaxTree
+import CompilerUtilities.AbstractSyntaxTree
 import CompilerUtilities.ProgramTable
 import Frontend.Simplification.Simplifier
 
