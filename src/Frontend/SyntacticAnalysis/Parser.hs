@@ -551,6 +551,7 @@ replaceTypeVars = foldr updateTypeVar
         l `TArrow` r -> updateTypeVar new l `TArrow` updateTypeVar new r
         TProd ts -> TProd $ NE.map (updateTypeVar new) ts
         TApp cons args -> TApp (sameName new cons) (map (sameName new) args)
+        TCons cons -> TCons cons
 
         where sameName new old = if symStr new == symStr old then new else old
 

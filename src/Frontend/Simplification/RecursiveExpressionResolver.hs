@@ -64,6 +64,8 @@ expression e = case e of
 
             Ident {} -> pure $ App l r
 
+            Cons _ [] -> pure $ App l r
+
             Tuple es -> do
                 es <- mapM expression es
                 pure $ App l (Tuple es)
@@ -82,7 +84,7 @@ expression e = case e of
             right <- expression right
             pure (left, right)
 
-    a -> mapExpression statement expression a
+    _ -> mapExpression statement expression e
 
 generateAssignment :: Expression -> RecursiveExpressionResolver Symbol
 generateAssignment e = do
@@ -97,12 +99,12 @@ freshAssignment (s, e) = do
 freshLocal e = do
     (p, (nextId, t)) <- getProg
     (stmts, l, parent) <- getLocal
-    let eType = exprType t e
     putLocal (stmts, l + 1, parent)
-    let (Just (scope, absName)) = parent
-    let name = (Symb (ResolvedName nextId (("_gen" ++ show l):|NE.toList absName)) (Meta 0 0 ""))
-    let tableEntry = EntryVar name (("_gen" ++ show l):|NE.toList absName) scope (Just eType)
-    let (Just newTable) = insertTableEntry nextId tableEntry t
+    let eType = exprType t e
+        Just (scope, absName) = parent
+        name = Symb (ResolvedName nextId (("_gen" ++ show l):|NE.toList absName)) (Meta 0 0 "")
+        tableEntry = EntryVar name (("_gen" ++ show l):|NE.toList absName) scope (Just eType)
+        (Just newTable) = insertTableEntry nextId tableEntry t
     putProg (p, (nextId + 1, newTable))
     pure name
 
