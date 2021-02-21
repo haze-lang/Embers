@@ -16,6 +16,7 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
+{-# LANGUAGE FlexibleContexts #-}
 
 module Frontend.TypeSystem.TypeChecker
 (
@@ -23,38 +24,43 @@ module Frontend.TypeSystem.TypeChecker
 )
 where
 
-import Control.Monad.Except
-import Data.List.NonEmpty (NonEmpty((:|)), fromList, toList)
-import qualified Data.List.NonEmpty as NE
-import Control.Monad.State
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as M
 import Data.Maybe (fromJust)
+import qualified Data.List.NonEmpty as NE
+import Data.List.NonEmpty (NonEmpty((:|)), fromList, toList)
+import Control.Monad.RWS
+import Control.Monad.Except
+
 import Frontend.Error.CompilerError
 import Frontend.Error.TypeError
 import CompilerUtilities.AbstractSyntaxTree
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as M
 import CompilerUtilities.ProgramTable
+
 import Frontend.TypeSystem.Inference.ConstraintGenerator
 import Frontend.TypeSystem.Inference.Unifier
 
-type TypeChecker a = ExceptT CompilerError (State TypeCheckerState) a
+type TypeChecker a = ExceptT CompilerError (RWS Program ([ProgramElement], [CompilerError]) TableState) a
 
 typeCheck :: ProgramState -> Either [CompilerError] ProgramState
-typeCheck (p, t) = case runState (runExceptT program) $! initState p t of
-    (Right p, (_, t, [])) -> Right (p, t)
-    (Right p, (_, t, err)) -> Left err
-    (Left a, _) -> Left [a]
+typeCheck (p, t) = case runRWS (runExceptT program) p t of
+    (Right _, t, (p, [])) -> Right (Program p, t)
+    (Right _, _, (_, err)) -> Left err
+    (Left err, _, _) -> Left [err]
 
+program :: TypeChecker ()
 program = do
-    (Program p, _, _) <- get
-    Program <$> mapM programElement p
+    Program p <- ask
+    mapM_ element p
 
-programElement elem = case elem of
-        Ty _ -> pure elem
+    where
+    element elem = case elem of
+        Ty _ -> emit elem
         Proc {} -> procedure elem
         Func {} -> function elem
         -- ExpressionVar {} -> tExpr elem -- TODO
 
+procedure :: ProgramElement -> TypeChecker ()
 procedure (Proc ps retType name stmts) = do
     mapM_ statementType $ NE.init stmts
 
@@ -72,7 +78,7 @@ procedure (Proc ps retType name stmts) = do
         Just typeExpr -> do
             assertWithError (ReturnTypeMismatch retType typeExpr, extractStmtMeta $ NE.last stmts) typeExpr retType
             pure stmts
-    pure $ Proc ps retType name stmts
+    emit $ Proc ps retType name stmts
 
     where
     unitStmt = do
@@ -85,14 +91,14 @@ procedure (Proc ps retType name stmts) = do
 function (Func ps retType name e) = do
     t <- expressionType e
     assertWithError (ReturnTypeMismatch retType t, extractExprMeta e) t retType
-    pure $ Func ps retType name e
+    emit $ Func ps retType name e
 
 statementType (Assignment var r) = do
     varType <- lookupType' (symId var)
     t <- expressionType r
     case varType of
         Nothing -> defineVarType var t
-        Just someType -> do
+        Just someType ->
             assertWithError (MismatchingAssignment var someType t, symMeta var) someType t
     pure Nothing  -- Assignment statement has no type.
 
@@ -193,24 +199,24 @@ polymorphicApp l r tl tr = error "Polymorphic application not supported."
 
 inferType :: Expression -> TypeChecker ()
 inferType e = do
-    (nextId, table) <- getTableState
+    (nextId, table) <- get
     context <- toContext
     let (nextId', context', constraints) = generateConstraints e nextId context -- TODO: Merge contraint generation with Type Checker.
     let solution = unify (context', constraints)
     case solution of
-        Right context -> do
+        Right (Context context) -> do
             mapM_ updateTable (M.toList context)
             setNextId nextId'
         Left err -> throwCompilerError err (extractExprMeta e)
 
     where
-    toContext :: TypeChecker (Map Symbol TypeExpression)
+    toContext :: TypeChecker Context
     toContext = do
         table <- getTable
         let filtered = M.filter pred table
         let symbols = map (idToName table) (M.keys filtered)
         types <- mapM toType symbols
-        pure $ M.fromList (zip symbols types)
+        pure . Context $ M.fromList (zip symbols types)
 
         where
         toType symbol = do
@@ -227,7 +233,7 @@ inferType e = do
             _ -> True
 
     setNextId :: ID -> TypeChecker ()
-    setNextId nextId = get >>= \(program, (_, table), err) -> put (program, (nextId, table), err)
+    setNextId nextId = modify $ \(_, table) -> (nextId, table)
 
     updateTable (symbol, tExpr) = do
         table <- getTable
@@ -240,9 +246,7 @@ inferType e = do
         arrowRight (_ `TArrow` r) = r
 
         setTable :: Table -> TypeChecker ()
-        setTable table = do
-            (program, (nextId, _), err) <- get
-            put (program, (nextId, table), err)
+        setTable table = modify $ \(nextId, _) -> (nextId, table)
 
 assertWithError (err, m) t1 t2 = do
     a <- assertStructural t1 t2
@@ -268,11 +272,6 @@ assertStructural _ _ = pure False
 assertNominal (TProd (TCons source:|[])) target = source `cmpSymb` target
 assertNominal (TCons source) target = source `cmpSymb` target
 
-type TypeCheckerState = (Program, TableState, [CompilerError])
-
-initState :: Program -> TableState -> TypeCheckerState
-initState p t = (p, t, [])
-
 -- | Define a symbol's type.
 defineVarType (Symb (ResolvedName id absName) m) varType = do
     t <- getTable
@@ -285,24 +284,23 @@ defineVarType (Symb (ResolvedName id absName) m) varType = do
 
 updateEntry :: ID -> TableEntry -> TypeChecker ()
 updateEntry id newEntry = do
-    (inp, (nextId, table), err) <- get
+    (nextId, table) <- get
     table <- maybe (error "[Char]") pure (updateTableEntry id newEntry table)
-    put (inp, (nextId, table), err)
+    put (nextId, table)
 
 lookupType' :: ID -> TypeChecker (Maybe TypeExpression)
 lookupType' id = lookupType id <$> getTable
 
 getTable :: TypeChecker Table
-getTable = get >>= \(_, (_, table), _) -> pure table
-
-getTableState = get >>= \(_, (id, table), _) -> pure (id, table)
+getTable = gets snd
 
 throwCompilerError :: TypeError -> Metadata -> TypeChecker a
-throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit (NUMBER 1) m):|[])) m (TypeError error)
+throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") (StmtExpr (Lit (NUMBER 1) m):|[])) m (TypeError error)
 
 addError :: TypeError -> Metadata -> TypeChecker ()
 addError err m = do
-    (p, t, errors) <- get
-    let pe = Proc [] (TVar $ getSym "") (getSym "SomeProc") ((StmtExpr $ Lit (NUMBER 1) m):|[])
+    let pe = Proc [] (TVar $ getSym "") (getSym "SomeProc") (StmtExpr (Lit (NUMBER 1) m):|[])
     let error = Error pe m (TypeError err)
-    put (p, t, error:errors)
+    tell ([], [error])
+
+emit x = tell ([x], [])
