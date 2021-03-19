@@ -41,72 +41,69 @@ import Frontend.Error.NameResolutionError
 import Frontend.LexicalAnalysis.Token
 
 import CompilerUtilities.SourcePrinter
+import Control.Monad.Writer
 
-type Parser a = StateT ParserState (Except CompilerError) a
+type Parser a = WST [ProgramElement] ParserState (Except CompilerError) a
 
 {-
     Except placed inside StateT so that upon failure (empty, <|>, throwError), changes in state are discarded.
 
     No Maybe/Either/ExceptT like
-
+    ```
     StateT s (ExceptT e Maybe) a
-
+    ```
     is required inside StateT since Except acts as Either and Monoid instance of CompilerError takes care of
     creating values out of thin air (CombinatorFailure).
  -}
 
-runParser p s = runExceptT (runStateT p s)
-
 -- | Parses the given token stream and returns syntax tree.
 parseTokens :: [Token] -> Either [CompilerError] ProgramState
 parseTokens src = case runParser program (initParserState src initializeTable) of
-    Identity (Right (p, ([], _, _, t, []))) -> Right (p, t)
-    Identity (Right (_, (_, _, _, _, errors))) -> Left errors
-    Identity (Left err) -> Left [err]
+    Right (p, ([], _, _, t, [])) -> Right (Program p, t)
+    Right (_, (_, _, _, _, errors)) -> Left errors
+    Left err -> Left [err]
 
 parseTokensStdLib :: [Token] -> [Token] -> Either [CompilerError] ProgramState
 parseTokensStdLib stdLib src = case runParser standardLibrary (initParserState stdLib (0, M.empty)) of
-    Identity (Right (Program stdLibElements, ([], _, _, t, []))) ->
+    Right (stdLibElements, ([], _, _, t, [])) ->
         case runParser program (initParserState src (initializeTableWith t)) of
-            Identity (Right (Program pes, ([], _, _, t, []))) -> Right (Program (stdLibElements ++ pes), t)
-            Identity (Right (_, (_, _, _, _, errors))) -> Left errors
-            Identity (Left err) -> Left [err]
+            Right (pes, ([], _, _, t, [])) -> Right (Program (stdLibElements ++ pes), t)
+            Right (_, (_, _, _, _, errors)) -> Left errors
+            Left err -> Left [err]
 
-    Identity (Right (p, (ts, _, _, t, errors))) -> Left errors
-    Identity (Left err) -> Left [err]
+    Right (p, (ts, _, _, t, errors)) -> Left errors
+    Left err -> Left [err]
 
-standardLibrary :: Parser Program
-standardLibrary = Program <$> many typesValues
+standardLibrary :: Parser ()
+standardLibrary = void $ many typesValues
     where
     typesValues = do
         ts <- typeDef
         many wspace
-        pure ts
         <|> do
         vs <- valueDef
         many wspace
-        pure vs
 
-program :: Parser Program
+program :: Parser ()
 program = do
-    ts <- many typeDef
+    many typeDef
     many wspace
     v <- valueDef
-    defs <- many (valueDef <|> typeDef)
-    many wspace
-    pure $ Program $ ts ++ v : defs
+    many (valueDef <|> typeDef)
+    void $ many wspace
 
-typeDef :: Parser ProgramElement
+typeDef :: Parser ()
 typeDef = do
     many wspace
-    Ty <$> _type
+    t <- _type
+    tell [Ty t]
 
-valueDef :: Parser ProgramElement
+valueDef :: Parser ()
 valueDef = many wspace >> arrowInstance
 -- valueDef = many wspace >> exprDef <|> arrowInstance
 
 -- TODO
-exprDef :: Parser ProgramElement
+exprDef :: Parser ()
 exprDef = do
     ts <- typeSig  -- Pushes Scope
     let (TypeSig nameTypeSig exprType, typeVars) = ts
@@ -118,12 +115,12 @@ exprDef = do
     e <- expression
     unless (null typeVars) (error $ "Type variables not supported in non-arrow value definitions: " ++ show typeVars)
     endScope
-    pure $ ExpressionVar exprType name e
+    tell [ExpressionVar exprType name e]
 
-arrowInstance :: Parser ProgramElement
+arrowInstance :: Parser ()
 arrowInstance = procedure <|> function
 
-procedure :: Parser ProgramElement
+procedure :: Parser ()
 procedure = do
     (TypeSig nameTypeSig procType, typeVars) <- typeSig
     token (WHITESPACE Newline) <|> throwCompilerError TerminatorExpected (symMeta nameTypeSig)
@@ -138,7 +135,7 @@ procedure = do
     token $ WHITESPACE Newline
     body <- block
     endScope
-    pure $ Proc boundParams returnType name body
+    tell [Proc boundParams returnType name body]
 
 block :: Parser (NonEmpty Statement)
 block = do
@@ -160,7 +157,7 @@ assignment = do
     token EQUALS
     Assignment x <$> expression
 
-function :: Parser ProgramElement
+function :: Parser ()
 function = do
     (TypeSig nameTypeSig funcType, typeVars) <- typeSig
     token (WHITESPACE Newline) <|> throwCompilerError TerminatorExpected (symMeta nameTypeSig)
@@ -175,7 +172,7 @@ function = do
     token EQUALS
     body <- expression
     endScope
-    pure $ Func boundParams returnType name body
+    tell [Func boundParams returnType name body]
 
 formalParam :: Parser (NonEmpty Parameter)
 formalParam = do
@@ -684,11 +681,11 @@ insertEntry entry = do
         Nothing -> empty
 
 throwCompilerError :: ParseError -> Metadata -> Parser a
-throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit (NUMBER 1) m):|[])) m (ParseError error)
+throwCompilerError error m = throwError $ Error (Proc [] (TVar $ getSym "") (getSym "a") (StmtExpr (Lit (NUMBER 1) m):|[])) m (ParseError error)
 
 addError :: ParseError -> Metadata -> Parser ()
 addError parseError m =
-    let error = Error (Proc [] (TVar $ getSym "") (getSym "a") ((StmtExpr $ Lit (NUMBER 1) m):|[])) m (ParseError parseError)
+    let error = Error (Proc [] (TVar $ getSym "") (getSym "a") (StmtExpr (Lit (NUMBER 1) m):|[])) m (ParseError parseError)
     in modify (\(inp, s, lambdaNo, (id, table), err) ->
         (inp, s, lambdaNo, (id, table), error:err))
 
@@ -696,7 +693,7 @@ type LambdaNo = Int
 type VirtualParamNo = Int
 type GenState = (LambdaNo, VirtualParamNo)
 
-type ErrorState = ([CompilerError])
+type ErrorState = [CompilerError]
 type ScopeState = (Scope, AbsoluteName)
 type ParserState = ([Token], ScopeState, GenState, TableState, ErrorState)
 
@@ -725,3 +722,16 @@ many v = many_v
     where
     many_v = some_v <|> pure []
     some_v = (:) <$> v <*> many_v
+
+-- Monad stack helpers.
+
+type WST w s t = WriterT w (StateT s t)
+
+-- | Discards result (return value) of `p`.
+runParser p s = runIdentity $ runExceptT (runStateT (execWriterT p) s)
+
+-- | For debugging purposes.
+debugParserCombinator src c = case runParser c (initParserState src initializeTable) of
+    (Right (p, ([], _, _, t, []))) -> Right (p, t)
+    (Right (_, (_, _, _, _, errors))) -> Left errors
+    (Left err) -> Left [err]
