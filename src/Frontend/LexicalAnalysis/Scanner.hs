@@ -109,10 +109,6 @@ symbols = dot
     <|> bslash
     <|> cross
     <|> comma
-    <|> darrow
-    <|> equals
-    <|> colon
-    <|> arrow
     <|> iarrow
     <|> lparen
     <|> rparen
@@ -130,11 +126,7 @@ dot = keyword "." DOT
 bar = keyword "|" BAR
 cross = keyword "X" CROSS
 comma = keyword "," COMMA
-equals = keyword "=" EQUALS
-colon = keyword ":" COLON
-arrow = keyword "->" ARROW
 iarrow = keyword "~>" IARROW
-darrow = keyword "=>" DARROW
 bslash = keyword "\\" BSLASH
 lparen = keyword "(" LPAREN
 rparen = keyword ")" RPAREN
@@ -152,8 +144,10 @@ ident = do
 identSymbols :: Scanner (NonEmpty Token)
 identSymbols = do
     m <- getMeta
-    s <- some $ (tryChar '=' >> pure 'e')
+    s <- some $
+            (tryChar '=' >> pure 'e')
         <|> (tryChar '`' >> pure 't')
+        <|> (tryChar ':' >> pure 'c')
         <|> (tryChar '!' >> pure 'E')
         <|> (tryChar '@' >> pure 'a')
         <|> (tryChar '$' >> pure 'D')

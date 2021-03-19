@@ -111,7 +111,7 @@ exprDef = do
     name <- funcIdent
     name <- beginScope name $ ExprVal Nothing
     validateNames name nameTypeSig
-    token EQUALS
+    equals
     e <- expression
     unless (null typeVars) (error $ "Type variables not supported in non-arrow value definitions: " ++ show typeVars)
     endScope
@@ -154,7 +154,7 @@ assignment :: Parser Statement
 assignment = do
     x <- ident
     x <- resolveName x <|> defineName x (ExprVal Nothing)     -- First assignment to unbound is definition.
-    token EQUALS
+    equals
     Assignment x <$> expression
 
 function :: Parser ()
@@ -169,7 +169,7 @@ function = do
     params <- formalParam
     (boundParams, returnType) <- bindParams funcType params
     boundParams <- mapM defineParameter boundParams
-    token EQUALS
+    equals
     body <- expression
     endScope
     tell [Func boundParams returnType name body]
@@ -182,14 +182,14 @@ formalParam = do
 typeSig :: Parser (TypeSignature, [Symbol])
 typeSig = do
     name <- ident
-    token COLON
+    colon
     (sig, typeVars) <- sigArrow
     pure (TypeSig name sig, typeVars)
 
 sigArrow :: Parser (TypeExpression, [Symbol])
 sigArrow = do
     (tl, typeVarsL) <- sigProd
-    token ARROW
+    arrow
     (tr, typeVarsR) <- sigArrow
     pure (TArrow tl tr, typeVarsL ++ typeVarsR)
     <|> sigProd
@@ -235,7 +235,7 @@ sumType = do
     params <- many (do
         x <- typeVarIdent
         defineName x $ ExprVal Nothing)
-    token EQUALS
+    equals
     cons <- productType name
     conss <- many (do
         token BAR
@@ -274,7 +274,7 @@ recordType = do
     token RECORD
     typeName <- ident
     typeName <- beginScope typeName Type
-    token EQUALS
+    equals
     cons <- ident
     cons <- pure $ handleSameCons cons typeName
     cons <- defineNameInParent cons Constructor
@@ -290,7 +290,7 @@ recordType = do
 
     memberDeclaration = do
         member <- ident
-        token COLON
+        colon
         memberType <- typeIdent
         terminator
         member <- defineName member (ExprVal $ Just $ TCons memberType)
@@ -352,14 +352,14 @@ switchExpr = do
     e <- expression
     token $ WHITESPACE Newline
     cases <- fromList <$> some _case
-    token DEFAULT >> token ARROW
+    token DEFAULT >> arrow
     Switch e cases <$> expression
 
     where
     _case :: Parser (Expression, Expression)
     _case = do
         p <- _pattern
-        token ARROW
+        arrow
         e <- expression
         terminator
         pure (p, e)
@@ -372,7 +372,7 @@ lambdaExpr = procLambdaExpr <|> funcLambdaExpr
         let lambdaMeta = getLambdaMeta params
         name <- pushScopeLambda lambdaMeta Procedure
         params <- mapM defLambdaParam (toList params)
-        token DARROW
+        dArrow
         many wspace
         do  b <- block
             endScope
@@ -383,7 +383,7 @@ lambdaExpr = procLambdaExpr <|> funcLambdaExpr
         let lambdaMeta = getLambdaMeta params
         name <- pushScopeLambda lambdaMeta Function
         params <- mapM defLambdaParam (toList params)
-        token DARROW
+        dArrow
         do  e <- application <|> expression
             endScope
             pure $ Lambda $ FuncLambda name (fromList params) e
@@ -447,6 +447,20 @@ ident = do
     x <- next
     case x of
         T (TkIdent name) m -> pure $ Symb name m
+        _ -> empty
+
+colon = operator "_operator_c"
+
+equals = operator "_operator_e"
+
+arrow = operator "_operator_mg"
+
+dArrow = operator "_operator_eg"
+
+operator operatorStr = do
+    x <- next
+    case x of
+        T (TkSymb name@(IDENTIFIER identStr)) m | identStr == operatorStr -> pure $ Symb name m
         _ -> empty
 
 procIdent = startsWithUpper
