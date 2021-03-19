@@ -17,7 +17,7 @@ You should have received a copy of the GNU General Public License
 along with Embers.  If not, see <https://www.gnu.org/licenses/>.
 -}
 
-{-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 module Frontend.LexicalAnalysis.Scanner
 (
@@ -36,43 +36,43 @@ import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Char
 import Frontend.Error.CompilerError
+import Control.Monad.Writer
 
 {-
     *** Important
     If throwError is to be used, the Alternative functions '<|>', 'some' and 'many' must be redefined for error propagation similar to Parser module.
 -}
 
-type Scanner a = StateT ScannerState (Except CompilerError) a
+type Scanner a = WST [Token] ScannerState (Except CompilerError) a
 
 -- |Scans the given string and returns list of tokens.
 scan :: Filename -> String -> Either [CompilerError] [Token]
-scan filename source = case runExceptT (runStateT (many root) (initState (filename, source))) of
-    Identity (Right (tokens, (Str [] m, []))) -> Right $ concatNE tokens
-    Identity (Right (tokens, (Str _ m, errors))) -> Left errors
-    Identity (Left err) -> Left [err]
-
-    where concatNE = concat . map NE.toList
+scan filename source = case runIdentity $ runExceptT (runStateT (execWriterT $ many root) (initState (filename, source))) of
+    Right (tokens, (Str [] m, [])) -> Right tokens
+    Right (_, (_, errors)) -> Left errors
+    Left err -> Left [err]
 
 root = trash <|> symbolsLiterals <|> keywordsIdent
 
+keywordsIdent :: Scanner ()
 keywordsIdent = do
     id <- ident
     let name = case id of
-            NEHead (T (TkIdent (IDENTIFIER s)) _) -> s
-            NEHead (T (TkSymb (IDENTIFIER s)) _) -> s
+            T (TkIdent (IDENTIFIER s)) _ -> s
+            T (TkSymb (IDENTIFIER s)) _ -> s
     case getKeyword name of
-        Just t -> pure t
-        Nothing -> pure id
+        Just t -> tell t
+        Nothing -> tell [id]
 
-getKeyword str = case runExceptT (runStateT keywords (initState ("", str))) of
-    Identity (Right (kword, (Str [] _, []))) -> Just kword
+getKeyword str = case runIdentity $ runExceptT (runStateT (execWriterT keywords) (initState ("", str))) of
+    Right (kword, (Str [] _, [])) -> Just kword
     _ -> Nothing
 
-keyword :: String -> TokenType -> Scanner (NonEmpty Token)
+keyword :: String -> TokenType -> Scanner ()
 keyword word t = do
     m <- getMeta
     x <- tryString word
-    pure $ NEHead $ T t m
+    emitToken t m
 
 trash = wspaces <|> comment
 
@@ -80,13 +80,13 @@ wspaces = do
     m <- getMeta
     do 
         some space
-        pure $ NEHead $ T (WHITESPACE Space) m
+        emitToken (WHITESPACE Space) m
         <|> do
         some tab
-        pure $ NEHead $ T (WHITESPACE Tab) m
+        emitToken (WHITESPACE Tab) m
         <|> do
         some line
-        pure $ NEHead $ T (WHITESPACE Newline) m
+        emitToken (WHITESPACE Newline) m
 
 symbolsLiterals = literals <|> symbols
 
@@ -133,15 +133,15 @@ rparen = keyword ")" RPAREN
 lbrace = keyword "{" LBRACE
 rbrace = keyword "}" RBRACE
 
-ident :: Scanner (NonEmpty Token)
+ident :: Scanner Token
 ident = do
     m <- getMeta
     x <- alpha
     xs <- many alphanum
-    pure $ NEHead $ T (TkIdent $ IDENTIFIER (x:xs)) m
+    pure $ T (TkIdent $ IDENTIFIER (x:xs)) m
     <|> identSymbols
 
-identSymbols :: Scanner (NonEmpty Token)
+identSymbols :: Scanner Token
 identSymbols = do
     m <- getMeta
     s <- some $
@@ -162,82 +162,83 @@ identSymbols = do
         <|> (tryChar '>' >> pure 'g')
         <|> (tryChar '?' >> pure 'q')
         <|> (tryChar '/' >> pure 'f')
-    pure $ NEHead $ T (TkSymb $ IDENTIFIER ("_operator_" ++ s)) m
+    pure $ T (TkSymb $ IDENTIFIER ("_operator_" ++ s)) m
 
 -- Comments ending with file ending are not supported.
-comment :: Scanner (NonEmpty Token)
+comment :: Scanner ()
 comment = do
     m <- getMeta
     tryString "//" <|> tryString "--"
     many (sat Data.Char.isPrint)
     line                            -- Comments may be used as terminators.
+    emitToken (WHITESPACE Newline) m
 
-numberLit :: Scanner (NonEmpty Token)
+numberLit :: Scanner ()
 numberLit = do
     m <- getMeta
     tryChar '-'
     n <- some digit
-    pure $ NEHead $ T (TkLit $ NUMBER (-(read n))) m
+    emitToken (TkLit $ NUMBER (-(read n))) m
     <|> do
     m <- getMeta
     n <- some digit
-    pure $ NEHead $ T (TkLit $ NUMBER (read n)) m
+    emitToken (TkLit $ NUMBER (read n)) m
 
-charLit :: Scanner (NonEmpty Token)
+charLit :: Scanner ()
 charLit = do
     m <- getMeta
     tryChar '\''
     do
         c <- alphanum
         tryChar '\''
-        pure $ NEHead $ T (TkLit $ CHAR c) m
+        emitToken (TkLit $ CHAR c) m
         <|> failToken UnterminatedCharLiteral m
 
-stringLit :: Scanner (NonEmpty Token)
+stringLit :: Scanner ()
 stringLit = do
     m <- getMeta
     tryChar '"'
     do
         x <- many alphanumSpace
         tryChar '"'
-        pure $ resolveStrLiteral x m
+        tell $ NE.toList $ resolveStrLiteral x m
         <|> failToken UnterminatedStringLiteral m
 
-unitLit :: Scanner (NonEmpty Token)
+unitLit :: Scanner ()
 unitLit = do
     m <- getMeta
     tryChar '('
     tryChar ')'
-    pure $ NEHead $ T (TkIdent (IDENTIFIER "Unit")) m
+    emitToken (TkIdent (IDENTIFIER "Unit")) m
 
-semicolon :: Scanner (NonEmpty Token)
+semicolon :: Scanner ()
 semicolon = do
     m <- getMeta
     tryChar ';'
-    pure $ NEHead $ T SEMICOLON m
+    emitToken SEMICOLON m
 
-space :: Scanner (NonEmpty Token)
+space :: Scanner Token
 space = do
     m <- getMeta
     ws <- whitespace
-    pure $ NEHead $ T (WHITESPACE Space) m
+    pure $ T (WHITESPACE Space) m
 
-tab :: Scanner (NonEmpty Token)
+tab :: Scanner Token
 tab = do
     m <- getMeta
     t <- horizontaltab
-    pure $ NEHead $ T (WHITESPACE Tab) m
+    pure $ T (WHITESPACE Tab) m
 
-line :: Scanner (NonEmpty Token)
+line :: Scanner Token
 line = do
     m <- getMeta
-    nl <- newline
-    pure $ NEHead $ T (WHITESPACE Newline) m
+    newline
+    pure $ T (WHITESPACE Newline) m
 
-failToken :: LexicalError -> Metadata -> Scanner (NonEmpty Token)
+failToken :: LexicalError -> Metadata -> Scanner ()
 failToken error m = do
     modify $ \(src, err) -> (src, err ++ [LexicalError error m])
-    pure $ NEHead $ T (Invalid (show error)) m
+    emitToken (Invalid (show error)) m
 
 type ScannerState = (StrSource, [CompilerError])
 
@@ -320,7 +321,11 @@ resolveStrLiteral s m = T LPAREN m :| g s ++ [T RPAREN m]
 
 scanProcessed filename source = do
     tokens <- scan filename source
-    let processedTokens = filter (not.isSpaceToken) tokens
+    let processedTokens = filter (not . isSpaceToken) tokens
     pure processedTokens
 
-pattern NEHead x = x:|[]
+-- Monad stack helpers.
+
+type WST w s t = WriterT w (StateT s t)
+
+emitToken t m = tell [T t m]
