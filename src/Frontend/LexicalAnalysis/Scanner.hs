@@ -54,38 +54,39 @@ scan filename source = case runIdentity $ runExceptT (runStateT (execWriterT $ m
 
 root = trash <|> symbolsLiterals <|> keywordsIdent
 
-keywordsIdent :: Scanner ()
 keywordsIdent = do
     id <- ident
-    let name = case id of
-            T (TkIdent (IDENTIFIER s)) _ -> s
-            T (TkSymb (IDENTIFIER s)) _ -> s
-    case getKeyword name of
-        Just t -> tell t
-        Nothing -> tell [id]
+    trykeyword (tokenName id) <|> tell [id]
 
-getKeyword str = case runIdentity $ runExceptT (runStateT (execWriterT keywords) (initState ("", str))) of
-    Right (kword, (Str [] _, [])) -> Just kword
-    _ -> Nothing
+    where
+    tokenName (T (TkIdent (IDENTIFIER s)) _) = s
+    tokenName (T (TkSymb (IDENTIFIER s)) _) = s
 
-keyword :: String -> TokenType -> Scanner ()
-keyword word t = do
+trykeyword :: String -> Scanner ()
+trykeyword word = do
     m <- getMeta
-    x <- tryString word
-    emitToken t m
+    case word of
+        "record"    -> emitToken RECORD m
+        "type"      -> emitToken TYPE m
+        "if"        -> emitToken IF m
+        "then"      -> emitToken THEN m
+        "else"      -> emitToken ELSE m
+        "switch"    -> emitToken SWITCH m
+        "default"   -> emitToken DEFAULT m
+        _ -> empty
 
 trash = wspaces <|> comment
 
 wspaces = do
     m <- getMeta
     do 
-        some space
+        some matchSpace
         emitToken (WHITESPACE Space) m
         <|> do
-        some tab
+        some matchTab
         emitToken (WHITESPACE Tab) m
         <|> do
-        some line
+        some matchLine
         emitToken (WHITESPACE Newline) m
 
 symbolsLiterals = literals <|> symbols
@@ -94,14 +95,6 @@ literals = numberLit
     <|> stringLit
     <|> charLit
     <|> unitLit
-
-keywords = _type
-    <|> record
-    <|> _if
-    <|> _then
-    <|> _else
-    <|> switch
-    <|> _default
 
 symbols = dot
     <|> bar
@@ -115,23 +108,16 @@ symbols = dot
     <|> lbrace
     <|> rbrace
 
-_type = keyword "type" TYPE
-record = keyword "record" RECORD
-_if = keyword "if" IF
-_then = keyword "then" THEN
-_else = keyword "else" ELSE
-switch = keyword "switch" SWITCH
-_default = keyword "default" DEFAULT
-dot = keyword "." DOT
-bar = keyword "|" BAR
-cross = keyword "X" CROSS
-comma = keyword "," COMMA
-iarrow = keyword "~>" IARROW
-bslash = keyword "\\" BSLASH
-lparen = keyword "(" LPAREN
-rparen = keyword ")" RPAREN
-lbrace = keyword "{" LBRACE
-rbrace = keyword "}" RBRACE
+dot = matchEmit "." DOT
+bar = matchEmit "|" BAR
+cross = matchEmit "X" CROSS
+comma = matchEmit "," COMMA
+iarrow = matchEmit "~>" IARROW
+bslash = matchEmit "\\" BSLASH
+lparen = matchEmit "(" LPAREN
+rparen = matchEmit ")" RPAREN
+lbrace = matchEmit "{" LBRACE
+rbrace = matchEmit "}" RBRACE
 
 ident :: Scanner Token
 ident = do
@@ -165,15 +151,13 @@ identSymbols = do
     pure $ T (TkSymb $ IDENTIFIER ("_operator_" ++ s)) m
 
 -- Comments ending with file ending are not supported.
-comment :: Scanner ()
 comment = do
     m <- getMeta
     tryString "//" <|> tryString "--"
     many (sat Data.Char.isPrint)
-    line                            -- Comments may be used as terminators.
+    matchLine                            -- Comments may be used as terminators.
     emitToken (WHITESPACE Newline) m
 
-numberLit :: Scanner ()
 numberLit = do
     m <- getMeta
     tryChar '-'
@@ -184,7 +168,6 @@ numberLit = do
     n <- some digit
     emitToken (TkLit $ NUMBER (read n)) m
 
-charLit :: Scanner ()
 charLit = do
     m <- getMeta
     tryChar '\''
@@ -194,46 +177,43 @@ charLit = do
         emitToken (TkLit $ CHAR c) m
         <|> failToken UnterminatedCharLiteral m
 
-stringLit :: Scanner ()
 stringLit = do
     m <- getMeta
     tryChar '"'
     do
-        x <- many alphanumSpace
+        x <- many alphanumSpaceTab
         tryChar '"'
         tell $ NE.toList $ resolveStrLiteral x m
         <|> failToken UnterminatedStringLiteral m
 
-unitLit :: Scanner ()
-unitLit = do
-    m <- getMeta
-    tryChar '('
-    tryChar ')'
-    emitToken (TkIdent (IDENTIFIER "Unit")) m
+unitLit = matchEmit "()" (TkIdent $ IDENTIFIER "Unit")
 
-semicolon :: Scanner ()
-semicolon = do
-    m <- getMeta
-    tryChar ';'
-    emitToken SEMICOLON m
+semicolon = matchEmit ";" SEMICOLON
 
-space :: Scanner Token
-space = do
+matchSpace = do
     m <- getMeta
-    ws <- whitespace
+    space
     pure $ T (WHITESPACE Space) m
 
-tab :: Scanner Token
-tab = do
+matchTab = do
     m <- getMeta
-    t <- horizontaltab
+    horizontaltab
     pure $ T (WHITESPACE Tab) m
 
-line :: Scanner Token
-line = do
+matchLine = do
     m <- getMeta
     newline
     pure $ T (WHITESPACE Newline) m
+
+space = tryChar ' '
+
+horizontaltab = tryChar '\t'
+
+newline = tryString "\r\n" <|> tryString "\n"
+
+alphanum = sat Data.Char.isAlphaNum
+
+alphanumSpaceTab = alphanum <|> space <|> horizontaltab
 
 failToken :: LexicalError -> Metadata -> Scanner ()
 failToken error m = do
@@ -245,21 +225,15 @@ type ScannerState = (StrSource, [CompilerError])
 initState :: (Filename, String) -> ScannerState
 initState (filename, source) = (Str source (Meta 1 1 filename), [])
 
--- State Manipulation
+-- Scanner Helpers
 
 getMeta :: Scanner Metadata
 getMeta = do
-    Str str m <- gets fst
+    Str _ m <- gets fst
     pure m
 
-isSpaceToken (T (WHITESPACE Space) _) = True
-isSpaceToken _ = False
-
-isCommentToken (T COMMENT _) = True
-isCommentToken _ = False
-
-item :: Scanner Char
-item = do
+next :: Scanner Char
+next = do
     (Str inp m, err) <- get
     case inp of
         [] -> empty
@@ -273,32 +247,21 @@ item = do
             put (newState, err)
             pure x
 
--- Helpers
+matchEmit :: String -> TokenType -> Scanner ()
+matchEmit word t = do
+    m <- getMeta
+    x <- tryString word
+    emitToken t m
 
 sat :: (Char -> Bool) -> Scanner Char
 sat p = do
-    x <- item
+    x <- next
     if p x
         then pure x
         else empty
 
 tryChar :: Char -> Scanner Char
 tryChar x = sat (== x)
-
-whitespace :: Scanner Char
-whitespace = tryChar ' '
-
-horizontaltab :: Scanner Char
-horizontaltab = tryChar '\t'
-
-newline :: Scanner Char
-newline = tryChar '\r' <|> tryChar '\n'
-
-alphanum :: Scanner Char
-alphanum = sat Data.Char.isAlphaNum
-
-alphanumSpace :: Scanner Char
-alphanumSpace = alphanum <|> whitespace <|> horizontaltab
 
 tryString :: String -> Scanner String
 tryString [] = pure ""
@@ -307,10 +270,8 @@ tryString (x:xs) = do
     tryString xs
     pure $ x:xs
 
-alpha :: Scanner Char
 alpha = sat Data.Char.isAlpha
 
-digit :: Scanner Char
 digit = sat Data.Char.isDigit
 
 resolveStrLiteral s m = T LPAREN m :| g s ++ [T RPAREN m]
@@ -323,6 +284,10 @@ scanProcessed filename source = do
     tokens <- scan filename source
     let processedTokens = filter (not . isSpaceToken) tokens
     pure processedTokens
+
+    where    
+    isSpaceToken (T (WHITESPACE Space) _) = True
+    isSpaceToken _ = False
 
 -- Monad stack helpers.
 
