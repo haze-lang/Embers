@@ -308,7 +308,7 @@ application = do
 
 infixApp = do
     e <- expr
-    r <- many (do
+    r <- some (do       -- Noticable performance aggravation (REPL) when changed from `many` to `some`.
             operator <- symbIdent
             e2 <- expr
             pure (operator, e2))
@@ -472,17 +472,12 @@ typeVarIdent = do
     let (Symb (IDENTIFIER s) m) = n
     pure $ Symb (IDENTIFIER (s ++ "'")) m
 
-startsWithLower = do
-    name <- ident
-    if Data.Char.isLower $ head $ symStr name
-    then pure name
-    else empty
+startsWithLower = ident >>= guarded (Data.Char.isLower . head . symStr)
 
-startsWithUpper = do
-    name <- ident
-    if Data.Char.isUpper $ head $ symStr name
-    then pure name
-    else empty
+startsWithUpper = ident >>= guarded (Data.Char.isUpper . head . symStr)
+
+guarded :: Alternative f => (a -> Bool) -> a -> f a
+guarded condition x = if condition x then pure x else empty
 
 symbIdent :: Parser Symbol
 symbIdent = do
