@@ -47,4 +47,8 @@ executables:
     - -with-rtsopts=-N
     dependencies:
     - Embers
+    when:
+    - condition: false
+      other-modules: Paths_Embers  # Fix GHCi Warning: `Multiple files use the same module name`. See https://github.com/commercialhaskell/stack/issues/5439.
+
 description: Please see the README on GitHub at <https://github.com/haze-lang/Embers#readme>
