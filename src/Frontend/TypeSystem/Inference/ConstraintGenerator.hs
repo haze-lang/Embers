@@ -9,21 +9,22 @@ import Control.Monad.State
 import Control.Monad.Except
 import Data.List.NonEmpty (NonEmpty((:|)))
 import qualified Data.List.NonEmpty as NE
+import Data.Map (Map)
 import qualified Data.Map.Strict as M
 import CompilerUtilities.AbstractSyntaxTree
 import CompilerUtilities.ProgramTable
 
 type Infer a = State InferState a
 
--- | Maps free variables to type variables 
-newtype Context = Context (M.Map Symbol TypeExpression)
+-- | Maps free variables to type expressions.
+newtype Context = Context (Map Symbol TypeExpression)
 
--- | Maps type variables to types
+-- | Equates two type expressions.
 newtype Constraint = Constraint (TypeExpression, TypeExpression)
 
-generateConstraints :: Expression -> NextID -> M.Map Symbol TypeExpression -> (NextID, M.Map Symbol TypeExpression, [Constraint])
+generateConstraints :: Expression -> NextID -> Context -> (NextID, Context, [Constraint])
 generateConstraints e nextId c = case runState (expression e) (initState nextId c) of
-    (t, (nextId, _, Context context, constraints)) -> (nextId, context, constraints)
+    (t, (nextId, _, context, constraints)) -> (nextId, context, constraints)
 
 statement :: Statement -> Infer (Maybe TypeExpression)
 statement (StmtExpr e) = Just <$> expression e
@@ -123,8 +124,8 @@ getContext = gets $ \(_, _, Context c, _) -> c
 
 type InferState = (NextID, Int, Context, [Constraint])
 
-initState :: ID -> M.Map Symbol TypeExpression -> InferState
-initState nextId c = (nextId, 0, Context c, initConstraints)
+initState :: ID -> Context -> InferState
+initState nextId c = (nextId, 0, c, initConstraints)
 
 initConstraints :: [Constraint]
 initConstraints = []

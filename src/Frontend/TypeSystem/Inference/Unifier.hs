@@ -18,10 +18,10 @@ import Data.Map (Map)
 import Data.Maybe (isJust, fromMaybe)
 import Frontend.TypeSystem.Inference.ConstraintGenerator (Context(..), Constraint(..))
 
-unify :: (Map Symbol TypeExpression, [Constraint]) -> Either TypeError (Map Symbol TypeExpression)
+unify :: (Context, [Constraint]) -> Either TypeError Context
 unify s = case evalState (runExceptT solve) (initState s) of
     Left err -> Left err
-    Right (Context c) -> Right c
+    Right c -> Right c
 
 solve :: Unifier Context
 solve = do
@@ -143,7 +143,7 @@ getMapping = gets thd3
 getConstraints :: Unifier [Constraint]
 getConstraints = gets snd3
 
-initState (context, constraints) = (Context context, constraints, M.empty)
+initState (context, constraints) = (context, constraints, M.empty)
 
 tVar (TVar v) = v
 tVar x = error $ show x
