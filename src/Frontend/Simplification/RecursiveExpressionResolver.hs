@@ -71,8 +71,12 @@ expression e = case e of
                 pure $ App l (Tuple es)
 
             _ -> do
-                local <- generateAssignment r
-                pure $ App l $ Ident local
+                r <- expression r
+                case r of
+                    Ident _ -> pure $ App l r
+                    _ -> do
+                        local <- generateAssignment r
+                        pure $ App l $ Ident local
 
     Switch e cases def -> do
         e <- expression e
