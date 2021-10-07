@@ -299,15 +299,14 @@ recordType = do
 -- Expressions
 
 expression :: Parser Expression
-expression = application <|> infixApp <|> expr
-
-application :: Parser Expression
-application = do
-    func <- expr
-    App func <$> expr
-
-infixApp = do
+expression = do
     e <- expr
+    application e <|> infixApp e <|> pure e
+
+application :: Expression -> Parser Expression
+application left = App left <$> expr
+
+infixApp e = do
     r <- some (do       -- Noticable performance aggravation (REPL) when changed from `many` to `some`.
             operator <- symbIdent
             e2 <- expr
@@ -384,7 +383,7 @@ lambdaExpr = procLambdaExpr <|> funcLambdaExpr
         name <- pushScopeLambda lambdaMeta Function
         params <- mapM defLambdaParam (toList params)
         dArrow
-        do  e <- application <|> expression
+        do  e <- expression
             endScope
             pure $ Lambda $ FuncLambda name (fromList params) e
 
